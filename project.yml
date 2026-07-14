@@ -1,0 +1,59 @@
+name: Runbar
+
+options:
+  bundleIdPrefix: app.runbar
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "14.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    CLANG_ENABLE_MODULES: YES
+    CODE_SIGN_STYLE: Automatic
+    CURRENT_PROJECT_VERSION: 1
+    ENABLE_HARDENED_RUNTIME: YES
+    GENERATE_INFOPLIST_FILE: YES
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    MARKETING_VERSION: 0.1.0
+    SWIFT_STRICT_CONCURRENCY: complete
+    SWIFT_VERSION: "5.0"
+
+targets:
+  Runbar:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/Runbar
+    settings:
+      base:
+        ENABLE_APP_SANDBOX: NO
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        INFOPLIST_KEY_LSUIElement: YES
+        PRODUCT_BUNDLE_IDENTIFIER: app.runbar.Runbar
+        PRODUCT_NAME: Runbar
+
+  RunbarTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/RunbarTests
+    dependencies:
+      - target: Runbar
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: app.runbar.RunbarTests
+
+schemes:
+  Runbar:
+    build:
+      targets:
+        Runbar: all
+        RunbarTests: [test]
+    test:
+      gatherCoverageData: true
+      targets:
+        - RunbarTests
+    run:
+      config: Debug

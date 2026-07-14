@@ -1,0 +1,10 @@
+.DS_Store
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.profraw
+*.xcresult
+
+# Generated deterministically by bootstrap.sh from project.yml.
+Runbar.xcodeproj/
