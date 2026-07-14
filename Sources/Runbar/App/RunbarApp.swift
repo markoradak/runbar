@@ -8,15 +8,34 @@ struct RunbarApp: App {
         let credentialStore = KeychainCredentialStore.production
         let authValidator = GitHubAuthValidator.live()
 
+        let githubClient: GitHubClient?
+        let githubInitializationError: String?
+        do {
+            let store = try SQLiteGitHubStore.production()
+            githubClient = GitHubClient(store: store)
+            githubInitializationError = nil
+        } catch {
+            githubClient = nil
+            githubInitializationError = String(describing: error)
+        }
+
         let repoDiscovery: RepoDiscovery?
         let discoveryInitializationError: String?
-        do {
-            let store = try SQLiteStore.production()
-            repoDiscovery = RepoDiscovery(store: store)
-            discoveryInitializationError = nil
-        } catch {
+        if let githubClient {
+            do {
+                let store = try SQLiteStore.production()
+                repoDiscovery = RepoDiscovery(
+                    remoteDiscovery: GitHubRemoteRepoDiscovery(client: githubClient),
+                    store: store
+                )
+                discoveryInitializationError = nil
+            } catch {
+                repoDiscovery = nil
+                discoveryInitializationError = String(describing: error)
+            }
+        } else {
             repoDiscovery = nil
-            discoveryInitializationError = String(describing: error)
+            discoveryInitializationError = githubInitializationError
         }
 
         _settingsModel = StateObject(
@@ -24,7 +43,9 @@ struct RunbarApp: App {
                 credentialStore: credentialStore,
                 authValidator: authValidator,
                 repoDiscovery: repoDiscovery,
-                discoveryInitializationError: discoveryInitializationError
+                discoveryInitializationError: discoveryInitializationError,
+                githubClient: githubClient,
+                githubInitializationError: githubInitializationError
             )
         )
     }

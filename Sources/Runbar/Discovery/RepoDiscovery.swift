@@ -7,7 +7,7 @@ actor RepoDiscovery {
 
     init(
         localScanner: LocalRepoScanner = LocalRepoScanner(),
-        remoteDiscovery: any RemoteRepositoryDiscovering = GitHubRemoteRepoDiscovery(),
+        remoteDiscovery: any RemoteRepositoryDiscovering,
         store: any RepoDiscoveryStoring
     ) {
         self.localScanner = localScanner

@@ -3,7 +3,7 @@ import XCTest
 @testable import Runbar
 
 final class GitHubRemoteRepoDiscoveryTests: XCTestCase {
-    func testRequestShapeAndTopThirtyByPushedAt() async throws {
+    func testRequestShapeTopThirtyAndExplicit304Reuse() async throws {
         let payload: [[String: Any]] = (0..<35).map { index in
             [
                 "full_name": "owner/repo\(String(format: "%02d", index))",
@@ -11,57 +11,116 @@ final class GitHubRemoteRepoDiscoveryTests: XCTestCase {
             ]
         }
         let transport = RemoteDiscoveryTransportStub(
-            statusCode: 200,
-            body: try JSONSerialization.data(withJSONObject: payload)
+            steps: [
+                .init(
+                    statusCode: 200,
+                    body: try JSONSerialization.data(withJSONObject: payload),
+                    headers: ["ETag": #""repos-v1""#, "x-ratelimit-remaining": "4999"]
+                ),
+                .init(
+                    statusCode: 304,
+                    body: Data(),
+                    headers: ["x-ratelimit-remaining": "4999"]
+                )
+            ]
         )
-        let discovery = GitHubRemoteRepoDiscovery(transport: transport)
+        let client = GitHubClient(
+            store: RemoteDiscoveryStoreStub(),
+            transport: transport
+        )
+        let discovery = GitHubRemoteRepoDiscovery(client: client)
 
-        let repositories = try await discovery.discover(token: "m1-remote-request-marker")
-        let requestURL = await transport.url()
-        let method = await transport.method()
-        let accept = await transport.header(named: "Accept")
-        let apiVersion = await transport.header(named: "X-GitHub-Api-Version")
-        let hasAuthorization = await transport.usedExpectedAuthorization(token: "m1-remote-request-marker")
-        let cachePolicy = await transport.cachePolicy()
+        let fresh = try await discovery.discover(token: "m2-remote-request-marker")
+        let revalidated = try await discovery.discover(token: "m2-remote-request-marker")
+        let requests = await transport.requests()
 
-        XCTAssertEqual(repositories.count, 30)
-        XCTAssertEqual(repositories.first?.identity.fullName, "owner/repo34")
-        XCTAssertEqual(repositories.last?.identity.fullName, "owner/repo05")
+        XCTAssertEqual(fresh.count, 30)
+        XCTAssertEqual(fresh.first?.identity.fullName, "owner/repo34")
+        XCTAssertEqual(fresh.last?.identity.fullName, "owner/repo05")
+        XCTAssertEqual(revalidated, fresh)
+        XCTAssertEqual(requests.count, 2)
         XCTAssertEqual(
-            requestURL?.absoluteString,
-            "https://api.github.com/user/repos?sort=pushed&direction=desc&per_page=100"
+            requests[0].url,
+            "https://api.github.com/user/repos?direction=desc&per_page=100&sort=pushed"
         )
-        XCTAssertEqual(method, "GET")
-        XCTAssertEqual(accept, "application/vnd.github+json")
-        XCTAssertEqual(apiVersion, "2022-11-28")
-        XCTAssertTrue(hasAuthorization)
-        XCTAssertEqual(cachePolicy, .reloadIgnoringLocalAndRemoteCacheData)
+        XCTAssertEqual(requests[0].method, "GET")
+        XCTAssertEqual(requests[0].accept, "application/vnd.github+json")
+        XCTAssertEqual(requests[0].apiVersion, "2022-11-28")
+        XCTAssertEqual(requests[0].authorization, "Bearer m2-remote-request-marker")
+        XCTAssertNil(requests[0].ifNoneMatch)
+        XCTAssertEqual(requests[1].ifNoneMatch, #""repos-v1""#)
+        XCTAssertEqual(
+            requests[1].cachePolicy,
+            URLRequest.CachePolicy.reloadIgnoringLocalAndRemoteCacheData.rawValue
+        )
     }
 }
 
-private actor RemoteDiscoveryTransportStub: AuthTransport {
-    let statusCode: Int
-    let body: Data
-    private var request: URLRequest?
+private actor RemoteDiscoveryTransportStub: GitHubTransport {
+    struct Step: Sendable {
+        let statusCode: Int
+        let body: Data
+        let headers: [String: String]
+    }
 
-    init(statusCode: Int, body: Data) {
-        self.statusCode = statusCode
-        self.body = body
+    struct CapturedRequest: Sendable {
+        let url: String
+        let method: String?
+        let accept: String?
+        let apiVersion: String?
+        let authorization: String?
+        let ifNoneMatch: String?
+        let cachePolicy: UInt
+    }
+
+    private var steps: [Step]
+    private var captured: [CapturedRequest] = []
+
+    init(steps: [Step]) {
+        self.steps = steps
     }
 
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        self.request = request
+        captured.append(
+            CapturedRequest(
+                url: request.url?.absoluteString ?? "",
+                method: request.httpMethod,
+                accept: request.value(forHTTPHeaderField: "Accept"),
+                apiVersion: request.value(forHTTPHeaderField: "X-GitHub-Api-Version"),
+                authorization: request.value(forHTTPHeaderField: "Authorization"),
+                ifNoneMatch: request.value(forHTTPHeaderField: "If-None-Match"),
+                cachePolicy: request.cachePolicy.rawValue
+            )
+        )
+        guard !steps.isEmpty else { throw URLError(.badServerResponse) }
+        let step = steps.removeFirst()
         return (
-            body,
-            HTTPURLResponse(url: request.url!, statusCode: statusCode, httpVersion: nil, headerFields: nil)!
+            step.body,
+            HTTPURLResponse(
+                url: request.url!,
+                statusCode: step.statusCode,
+                httpVersion: "HTTP/1.1",
+                headerFields: step.headers
+            )!
         )
     }
 
-    func url() -> URL? { request?.url }
-    func method() -> String? { request?.httpMethod }
-    func header(named name: String) -> String? { request?.value(forHTTPHeaderField: name) }
-    func cachePolicy() -> URLRequest.CachePolicy? { request?.cachePolicy }
-    func usedExpectedAuthorization(token: String) -> Bool {
-        request?.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)"
+    func requests() -> [CapturedRequest] { captured }
+}
+
+private actor RemoteDiscoveryStoreStub: GitHubClientStoring {
+    private var cached: [String: GitHubCachedResponse] = [:]
+
+    func cachedResponse(for canonicalURL: String) async throws -> GitHubCachedResponse? {
+        cached[canonicalURL]
     }
+
+    func saveCachedResponse(_ response: GitHubCachedResponse, for canonicalURL: String) async throws {
+        cached[canonicalURL] = response
+    }
+
+    func isRepositoryAccessible(_ repositoryKey: String) async throws -> Bool { true }
+    func markRepositoryInaccessible(_ repositoryKey: String) async throws -> Bool { true }
+    func appendDebugEntry(_ entry: GitHubDebugEntry) async throws {}
+    func clearDebugEntries() async throws {}
 }

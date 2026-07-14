@@ -16,14 +16,25 @@ enum RepositoryDiscoveryState: Equatable {
     case failed(message: String)
 }
 
+enum ETagVerificationState: Equatable {
+    case idle
+    case running(completedRequests: Int)
+    case succeeded
+    case failed(message: String)
+}
+
 @MainActor
 final class SettingsModel: ObservableObject {
     @Published var tokenInput = ""
+    @Published var verificationRepositoryKey = ""
     @Published private(set) var state: SettingsAuthState = .loading
     @Published private(set) var discoveryState: RepositoryDiscoveryState = .idle
     @Published private(set) var codeRootPath: String?
     @Published private(set) var discoveredRepositories: [DiscoveredRepository] = []
     @Published private(set) var skippedLocalRepositories: [SkippedLocalRepository] = []
+    @Published private(set) var etagVerificationState: ETagVerificationState = .idle
+    @Published private(set) var githubDebugEntries: [GitHubDebugEntry] = []
+    @Published private(set) var repositoryAccessNotice: String?
 
     private static let logger = Logger(subsystem: "app.runbar.Runbar", category: "authentication")
     private static let discoveryLogger = Logger(subsystem: "app.runbar.Runbar", category: "discovery")
@@ -32,6 +43,8 @@ final class SettingsModel: ObservableObject {
     private let authValidator: any AuthValidating
     private let repoDiscovery: RepoDiscovery?
     private let discoveryInitializationError: String?
+    private let githubClient: GitHubClient?
+    private let githubInitializationError: String?
     private var hasLoaded = false
     private var periodicRefreshTask: Task<Void, Never>?
 
@@ -39,12 +52,16 @@ final class SettingsModel: ObservableObject {
         credentialStore: any CredentialStore,
         authValidator: any AuthValidating,
         repoDiscovery: RepoDiscovery? = nil,
-        discoveryInitializationError: String? = nil
+        discoveryInitializationError: String? = nil,
+        githubClient: GitHubClient? = nil,
+        githubInitializationError: String? = nil
     ) {
         self.credentialStore = credentialStore
         self.authValidator = authValidator
         self.repoDiscovery = repoDiscovery
         self.discoveryInitializationError = discoveryInitializationError
+        self.githubClient = githubClient
+        self.githubInitializationError = githubInitializationError
     }
 
     var isBusy: Bool {
@@ -53,6 +70,11 @@ final class SettingsModel: ObservableObject {
 
     var isRefreshingRepositories: Bool {
         discoveryState == .refreshing
+    }
+
+    var isRunningETagVerification: Bool {
+        if case .running = etagVerificationState { return true }
+        return false
     }
 
     var authenticatedLogin: String? {
@@ -77,6 +99,10 @@ final class SettingsModel: ObservableObject {
 
     var includedRepositoryCount: Int {
         discoveredRepositories.filter { !$0.isExcluded }.count
+    }
+
+    var verificationRepositories: [DiscoveredRepository] {
+        discoveredRepositories.filter { !$0.isExcluded && $0.isAccessible }
     }
 
     func loadIfNeeded() async {
@@ -196,8 +222,74 @@ final class SettingsModel: ObservableObject {
             if let index = discoveredRepositories.firstIndex(where: { $0.id == repository.id }) {
                 discoveredRepositories[index].isExcluded = isExcluded
             }
+            selectDefaultVerificationRepositoryIfNeeded()
         } catch {
             discoveryState = .failed(message: safeDiscoveryMessage(error))
+        }
+    }
+
+    func runETagVerification() async {
+        guard let githubClient else {
+            let detail = githubInitializationError.map { ": \($0)" } ?? "."
+            etagVerificationState = .failed(message: "Runbar could not open its GitHub cache\(detail)")
+            return
+        }
+        guard let repository = verificationRepositories.first(where: { $0.id == verificationRepositoryKey }) else {
+            etagVerificationState = .failed(message: "Choose an accessible repository first.")
+            return
+        }
+
+        let token: String
+        do {
+            guard let storedToken = try credentialStore.readToken() else {
+                etagVerificationState = .failed(message: "Save a GitHub credential before running the ETag check.")
+                return
+            }
+            token = storedToken
+        } catch {
+            etagVerificationState = .failed(message: safeCredentialMessage(error))
+            return
+        }
+
+        await githubClient.clearDebugEntries()
+        githubDebugEntries = []
+        repositoryAccessNotice = nil
+
+        for index in 0..<11 {
+            etagVerificationState = .running(completedRequests: index)
+            do {
+                _ = try await githubClient.get(
+                    ActionsRunsProbe.self,
+                    endpoint: .actionsRuns(repository: repository.identity),
+                    token: token,
+                    repositoryKey: repository.id
+                )
+            } catch let error as GitHubClientError {
+                githubDebugEntries = await githubClient.debugEntries()
+                handleGitHubClientError(error, repository: repository)
+                return
+            } catch {
+                githubDebugEntries = await githubClient.debugEntries()
+                etagVerificationState = .failed(message: GitHubClientError.transport.userMessage)
+                return
+            }
+            githubDebugEntries = await githubClient.debugEntries()
+            etagVerificationState = .running(completedRequests: index + 1)
+        }
+
+        let measured = Array(githubDebugEntries.suffix(10))
+        let remaining = measured.compactMap(\.rateLimit.remaining)
+        let all304 = measured.count == 10 && measured.allSatisfy { $0.statusCode == 304 }
+        let allRemainingPresent = remaining.count == 10
+        let nonDecreasing = zip(remaining, remaining.dropFirst()).allSatisfy { earlier, later in
+            later >= earlier
+        }
+        if all304 && allRemainingPresent && nonDecreasing {
+            etagVerificationState = .succeeded
+        } else {
+            etagVerificationState = .failed(
+                message: "The last ten requests were not stable free 304s; inspect the debug rows below."
+            )
         }
     }
 
@@ -227,6 +319,7 @@ final class SettingsModel: ObservableObject {
             codeRootPath = snapshot.codeRootPath
             discoveredRepositories = snapshot.repositories
             skippedLocalRepositories = snapshot.skippedLocalRepositories
+            selectDefaultVerificationRepositoryIfNeeded()
             discoveryState = .loaded
             Self.discoveryLogger.notice(
                 "Discovered \(snapshot.repositories.count, privacy: .public) repositories and excluded \(snapshot.skippedLocalRepositories.count, privacy: .public) local candidates"
@@ -234,6 +327,34 @@ final class SettingsModel: ObservableObject {
         } catch {
             discoveryState = .failed(message: safeDiscoveryMessage(error))
             Self.discoveryLogger.error("Repository discovery failed without logging paths, repository names, or credentials")
+        }
+    }
+
+    private func selectDefaultVerificationRepositoryIfNeeded() {
+        if !verificationRepositories.contains(where: { $0.id == verificationRepositoryKey }) {
+            verificationRepositoryKey = verificationRepositories.first?.id ?? ""
+        }
+    }
+
+    private func handleGitHubClientError(
+        _ error: GitHubClientError,
+        repository: DiscoveredRepository
+    ) {
+        switch error {
+        case .authentication:
+            state = .failed(message: error.userMessage, hasStoredCredential: true)
+            etagVerificationState = .failed(message: error.userMessage)
+        case let .accessDenied(repositoryKey, firstNotice):
+            if let index = discoveredRepositories.firstIndex(where: { $0.id == repositoryKey }) {
+                discoveredRepositories[index].isAccessible = false
+            }
+            if firstNotice {
+                repositoryAccessNotice = "\(repository.identity.fullName) is inaccessible to the saved fine-grained token and will no longer be polled."
+            }
+            selectDefaultVerificationRepositoryIfNeeded()
+            etagVerificationState = .failed(message: error.userMessage)
+        default:
+            etagVerificationState = .failed(message: error.userMessage)
         }
     }
 
@@ -259,5 +380,13 @@ final class SettingsModel: ObservableObject {
     private func safeDiscoveryMessage(_ error: Error) -> String {
         (error as? RepoDiscoveryError)?.userMessage
             ?? "Repository discovery failed."
+    }
+}
+
+private struct ActionsRunsProbe: Decodable, Sendable {
+    let totalCount: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case totalCount = "total_count"
     }
 }

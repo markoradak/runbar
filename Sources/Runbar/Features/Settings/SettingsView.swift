@@ -8,11 +8,12 @@ struct SettingsView: View {
         Form {
             accountSection
             discoverySection
+            GitHubDebugPane(model: model)
             storageSection
         }
         .formStyle(.grouped)
         .padding()
-        .frame(width: 680, height: 680)
+        .frame(width: 760, height: 850)
         .task { await model.loadIfNeeded() }
     }
 

@@ -5,53 +5,34 @@ protocol RemoteRepositoryDiscovering: Sendable {
 }
 
 struct GitHubRemoteRepoDiscovery: RemoteRepositoryDiscovering {
-    private static let endpoint = URL(string: "https://api.github.com/user/repos?sort=pushed&direction=desc&per_page=100")!
+    private let client: GitHubClient
 
-    private let transport: any AuthTransport
-    private let endpoint: URL
-
-    init(
-        transport: any AuthTransport = URLSessionAuthTransport.live(),
-        endpoint: URL = GitHubRemoteRepoDiscovery.endpoint
-    ) {
-        self.transport = transport
-        self.endpoint = endpoint
+    init(client: GitHubClient) {
+        self.client = client
     }
 
     func discover(token: String) async throws -> [RemoteRepository] {
         guard !token.isEmpty else { throw RepoDiscoveryError.remoteUnauthorized }
 
-        var request = URLRequest(
-            url: endpoint,
-            cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
-            timeoutInterval: 30
+        let endpoint = GitHubEndpoint(
+            pathSegments: ["user", "repos"],
+            queryItems: [
+                .init(name: "sort", value: "pushed"),
+                .init(name: "direction", value: "desc"),
+                .init(name: "per_page", value: "100")
+            ]
         )
-        request.httpMethod = "GET"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-
-        let data: Data
-        let response: HTTPURLResponse
+        let payload: [GitHubRepositoryResponse]
         do {
-            (data, response) = try await transport.send(request)
+            payload = try await client.get(
+                [GitHubRepositoryResponse].self,
+                endpoint: endpoint,
+                token: token
+            ).value
+        } catch let error as GitHubClientError {
+            throw map(error)
         } catch {
             throw RepoDiscoveryError.remoteTransport
-        }
-
-        switch response.statusCode {
-        case 200:
-            break
-        case 401:
-            throw RepoDiscoveryError.remoteUnauthorized
-        case 403:
-            throw RepoDiscoveryError.remoteForbidden
-        default:
-            throw RepoDiscoveryError.remoteStatus(response.statusCode)
-        }
-
-        guard let payload = try? JSONDecoder().decode([GitHubRepositoryResponse].self, from: data) else {
-            throw RepoDiscoveryError.invalidRemoteResponse
         }
 
         let repositories = payload.compactMap { item -> RemoteRepository? in
@@ -75,6 +56,23 @@ struct GitHubRemoteRepoDiscovery: RemoteRepositoryDiscovering {
         .map { $0 }
     }
 
+    private func map(_ error: GitHubClientError) -> RepoDiscoveryError {
+        switch error {
+        case .authentication:
+            .remoteUnauthorized
+        case .primaryRateLimit, .secondaryRateLimit:
+            .remoteForbidden
+        case .decoding:
+            .invalidRemoteResponse
+        case .transport:
+            .remoteTransport
+        case let .unexpectedStatus(status):
+            .remoteStatus(status)
+        case .invalidURL, .missingETag, .missingCachedBody, .persistence, .accessDenied:
+            .persistence(error.userMessage)
+        }
+    }
+
     private static func parseGitHubDate(_ value: String) -> Date? {
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -83,7 +81,7 @@ struct GitHubRemoteRepoDiscovery: RemoteRepositoryDiscovering {
     }
 }
 
-private struct GitHubRepositoryResponse: Decodable {
+private struct GitHubRepositoryResponse: Decodable, Sendable {
     let fullName: String
     let pushedAt: String?
 
