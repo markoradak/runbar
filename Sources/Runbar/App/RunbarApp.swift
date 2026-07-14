@@ -7,10 +7,24 @@ struct RunbarApp: App {
     init() {
         let credentialStore = KeychainCredentialStore.production
         let authValidator = GitHubAuthValidator.live()
+
+        let repoDiscovery: RepoDiscovery?
+        let discoveryInitializationError: String?
+        do {
+            let store = try SQLiteStore.production()
+            repoDiscovery = RepoDiscovery(store: store)
+            discoveryInitializationError = nil
+        } catch {
+            repoDiscovery = nil
+            discoveryInitializationError = String(describing: error)
+        }
+
         _settingsModel = StateObject(
             wrappedValue: SettingsModel(
                 credentialStore: credentialStore,
-                authValidator: authValidator
+                authValidator: authValidator,
+                repoDiscovery: repoDiscovery,
+                discoveryInitializationError: discoveryInitializationError
             )
         )
     }

@@ -7,6 +7,11 @@ options:
     macOS: "14.0"
   generateEmptyDirectories: true
 
+packages:
+  Yams:
+    url: https://github.com/jpsim/Yams.git
+    from: 6.2.2
+
 settings:
   base:
     CLANG_ENABLE_MODULES: YES
@@ -25,6 +30,9 @@ targets:
     platform: macOS
     sources:
       - path: Sources/Runbar
+    dependencies:
+      - package: Yams
+      - sdk: libsqlite3.tbd
     settings:
       base:
         ENABLE_APP_SANDBOX: NO
