@@ -38,6 +38,11 @@ final class SettingsModel: ObservableObject {
     @Published private(set) var repositoryAccessNotice: String?
     @Published private(set) var pollSchedulerSnapshot: PollSchedulerSnapshot = .idle
     @Published private(set) var gitWatchedRepositoryCount = 0
+    @Published private(set) var menuBarRuns: MenuBarRunSnapshot = .empty
+    @Published private(set) var menuBarNow = Date()
+    @Published private(set) var menuBarLoadError: String?
+    @Published private(set) var workflowJobs: [Int64: WorkflowJobsState] = [:]
+    @Published private(set) var isManualRefreshRunning = false
 
     private static let logger = Logger(subsystem: "app.runbar.Runbar", category: "authentication")
     private static let discoveryLogger = Logger(subsystem: "app.runbar.Runbar", category: "discovery")
@@ -50,10 +55,15 @@ final class SettingsModel: ObservableObject {
     private let githubInitializationError: String?
     private let pollScheduler: PollScheduler?
     private let gitWatcher: GitWatcher?
+    private let menuBarStore: (any MenuBarDataStoring)?
+    private let workflowJobsLoader: (any WorkflowJobsLoading)?
+    private let menuBarClock: any MenuBarClock
     private var hasLoaded = false
     private var isObservingPollScheduler = false
     private var periodicRefreshTask: Task<Void, Never>?
     private var wakeObservationTask: Task<Void, Never>?
+    private var menuBarTimerTask: Task<Void, Never>?
+    private var isMenuBarVisible = false
 
     init(
         credentialStore: any CredentialStore,
@@ -63,7 +73,10 @@ final class SettingsModel: ObservableObject {
         githubClient: GitHubClient? = nil,
         githubInitializationError: String? = nil,
         pollScheduler: PollScheduler? = nil,
-        gitWatcher: GitWatcher? = nil
+        gitWatcher: GitWatcher? = nil,
+        menuBarStore: (any MenuBarDataStoring)? = nil,
+        workflowJobsLoader: (any WorkflowJobsLoading)? = nil,
+        menuBarClock: any MenuBarClock = SystemMenuBarClock()
     ) {
         self.credentialStore = credentialStore
         self.authValidator = authValidator
@@ -73,11 +86,15 @@ final class SettingsModel: ObservableObject {
         self.githubInitializationError = githubInitializationError
         self.pollScheduler = pollScheduler
         self.gitWatcher = gitWatcher
+        self.menuBarStore = menuBarStore
+        self.workflowJobsLoader = workflowJobsLoader
+        self.menuBarClock = menuBarClock
     }
 
     deinit {
         periodicRefreshTask?.cancel()
         wakeObservationTask?.cancel()
+        menuBarTimerTask?.cancel()
     }
 
     var isBusy: Bool {
@@ -109,11 +126,13 @@ final class SettingsModel: ObservableObject {
         }
     }
 
-    var menuBarSystemImage: String {
-        guard authenticatedLogin != nil else { return "circle.dashed" }
-        return pollSchedulerSnapshot.isRateLimitDegraded
-            ? "exclamationmark.triangle.fill"
-            : "circle.fill"
+    var menuBarIconState: MenuBarIconState {
+        MenuBarIconState.resolve(
+            isAuthenticated: authenticatedLogin != nil,
+            isDegraded: pollSchedulerSnapshot.isRateLimitDegraded,
+            runningCount: menuBarRuns.running.count,
+            recent: menuBarRuns.recent
+        )
     }
 
     var includedRepositoryCount: Int {
@@ -129,6 +148,7 @@ final class SettingsModel: ObservableObject {
         hasLoaded = true
         await startPollSchedulerObservation()
         startWakeObservation()
+        await refreshMenuBarRuns()
         await loadStoredCredential()
         startPeriodicRefresh()
     }
@@ -321,6 +341,117 @@ final class SettingsModel: ObservableObject {
         }
     }
 
+    func menuBarDidAppear() {
+        isMenuBarVisible = true
+        restartMenuBarTimerIfNeeded()
+    }
+
+    func menuBarDidDisappear() {
+        isMenuBarVisible = false
+        menuBarTimerTask?.cancel()
+        menuBarTimerTask = nil
+    }
+
+    func refreshMenuBarRuns() async {
+        guard let menuBarStore else { return }
+        do {
+            menuBarNow = await menuBarClock.now()
+            menuBarRuns = try await menuBarStore.loadMenuBarRuns(recentLimit: 20)
+            menuBarLoadError = nil
+            restartMenuBarTimerIfNeeded()
+        } catch {
+            menuBarLoadError = "Runbar could not read persisted workflow runs."
+        }
+    }
+
+    func manualRefresh() async {
+        guard !isManualRefreshRunning else { return }
+        isManualRefreshRunning = true
+        defer { isManualRefreshRunning = false }
+        if let pollScheduler, pollSchedulerSnapshot.isRunning {
+            await pollScheduler.reconcile(trigger: .manual)
+        }
+        await refreshMenuBarRuns()
+    }
+
+    func jobsState(for runID: Int64) -> WorkflowJobsState {
+        workflowJobs[runID] ?? .idle
+    }
+
+    func expandJobs(for run: MenuBarRun) {
+        switch jobsState(for: run.id) {
+        case .idle, .failed:
+            Task { await loadJobs(for: run) }
+        case .loading, .loaded:
+            break
+        }
+    }
+
+    func loadJobs(for run: MenuBarRun) async {
+        guard let workflowJobsLoader else {
+            workflowJobs[run.id] = .failed("Runbar could not initialize the jobs loader.")
+            return
+        }
+        workflowJobs[run.id] = .loading
+        do {
+            guard let token = try credentialStore.readToken() else {
+                workflowJobs[run.id] = .failed("Save a GitHub credential to load jobs.")
+                return
+            }
+            let result = try await workflowJobsLoader.loadJobs(for: run, token: token)
+            workflowJobs[run.id] = .loaded(result.jobs)
+            await pollScheduler?.observeRateLimit(result.rateLimit)
+        } catch let error as GitHubClientError {
+            workflowJobs[run.id] = .failed(error.userMessage)
+            if case let .accessDenied(repositoryKey, _) = error {
+                if let index = discoveredRepositories.firstIndex(where: { $0.id == repositoryKey }) {
+                    discoveredRepositories[index].isAccessible = false
+                }
+                await configureMonitoring()
+                await refreshMenuBarRuns()
+            } else if error == .authentication {
+                state = .failed(message: error.userMessage, hasStoredCredential: true)
+                await stopPollScheduler()
+            }
+        } catch {
+            workflowJobs[run.id] = .failed("Runbar could not load workflow jobs.")
+        }
+    }
+
+    private func restartMenuBarTimerIfNeeded() {
+        menuBarTimerTask?.cancel()
+        menuBarTimerTask = nil
+        guard isMenuBarVisible else { return }
+        menuBarTimerTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let now = await self.menuBarClock.now()
+                self.menuBarNow = now
+                if let store = self.menuBarStore {
+                    for item in self.menuBarRuns.running {
+                        guard let elapsed = WorkflowRunPresentation.elapsedSeconds(
+                            startedAt: item.run.runStartedAt,
+                            now: now
+                        ) else { continue }
+                        try? await store.recordMenuBarTimerTick(
+                            MenuBarTimerTick(
+                                timestamp: now,
+                                runID: item.id,
+                                elapsedSeconds: elapsed,
+                                source: MenuBarTimerTick.localSource
+                            )
+                        )
+                    }
+                }
+                do {
+                    try await self.menuBarClock.sleepForTick()
+                } catch {
+                    return
+                }
+            }
+        }
+    }
+
     private func startPeriodicRefresh() {
         guard periodicRefreshTask == nil else { return }
         periodicRefreshTask = Task { [weak self] in
@@ -357,13 +488,17 @@ final class SettingsModel: ObservableObject {
         }
     }
 
-    private func receivePollSchedulerSnapshot(_ snapshot: PollSchedulerSnapshot) {
+    private func receivePollSchedulerSnapshot(_ snapshot: PollSchedulerSnapshot) async {
+        let previousSync = pollSchedulerSnapshot.lastSyncAt
         pollSchedulerSnapshot = snapshot
         if snapshot.hasAuthenticationFailure, hasStoredCredential {
             state = .failed(
                 message: "GitHub rejected the saved credential while polling.",
                 hasStoredCredential: true
             )
+        }
+        if snapshot.lastSyncAt != previousSync {
+            await refreshMenuBarRuns()
         }
     }
 
@@ -436,6 +571,7 @@ final class SettingsModel: ObservableObject {
             selectDefaultVerificationRepositoryIfNeeded()
             discoveryState = .loaded
             await configureMonitoring()
+            await refreshMenuBarRuns()
             Self.discoveryLogger.notice(
                 "Discovered \(snapshot.repositories.count, privacy: .public) repositories and excluded \(snapshot.skippedLocalRepositories.count, privacy: .public) local candidates"
             )

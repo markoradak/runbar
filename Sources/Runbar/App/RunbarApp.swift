@@ -12,12 +12,15 @@ struct RunbarApp: App {
         let repoDiscovery: RepoDiscovery?
         let pollScheduler: PollScheduler?
         let gitWatcher: GitWatcher?
+        let menuBarStore: (any MenuBarDataStoring)?
+        let workflowJobsLoader: (any WorkflowJobsLoading)?
         let initializationError: String?
         do {
             let discoveryStore = try SQLiteStore.production()
             let githubStore = try SQLiteGitHubStore.production()
             let pollStore = try SQLitePollStore.production()
             let gitWatcherStore = try SQLiteGitWatcherStore.production()
+            let menuStore = try SQLiteMenuBarStore.production()
             let client = GitHubClient(store: githubStore)
             let scheduler = PollScheduler(
                 poller: GitHubRunPoller(client: client, store: pollStore),
@@ -31,12 +34,16 @@ struct RunbarApp: App {
             )
             pollScheduler = scheduler
             gitWatcher = GitWatcher(localPushPoller: scheduler, recorder: gitWatcherStore)
+            menuBarStore = menuStore
+            workflowJobsLoader = GitHubWorkflowJobsLoader(client: client)
             initializationError = nil
         } catch {
             githubClient = nil
             repoDiscovery = nil
             pollScheduler = nil
             gitWatcher = nil
+            menuBarStore = nil
+            workflowJobsLoader = nil
             initializationError = String(describing: error)
         }
 
@@ -48,7 +55,9 @@ struct RunbarApp: App {
             githubClient: githubClient,
             githubInitializationError: initializationError,
             pollScheduler: pollScheduler,
-            gitWatcher: gitWatcher
+            gitWatcher: gitWatcher,
+            menuBarStore: menuBarStore,
+            workflowJobsLoader: workflowJobsLoader
         )
         _settingsModel = StateObject(wrappedValue: model)
         Task { @MainActor in
@@ -58,9 +67,9 @@ struct RunbarApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarContentView(model: settingsModel)
+            RunbarMenuView(model: settingsModel)
         } label: {
-            Label("Runbar", systemImage: settingsModel.menuBarSystemImage)
+            MenuBarStatusLabel(state: settingsModel.menuBarIconState)
         }
         .menuBarExtraStyle(.window)
 

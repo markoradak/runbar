@@ -127,6 +127,37 @@ final class PollSchedulerTests: XCTestCase {
         XCTAssertEqual(events.map(\.isRateLimitDegraded), [true, false])
     }
 
+    func testObservedJobsRateLimitUsesSameDegradationThreshold() async {
+        let clock = ManualPollClock(now: now)
+        let scheduler = makeScheduler(
+            poller: ScriptedRunPoller(steps: [
+                "owner/one": [.success(result(runs: [], remaining: 500))],
+                "owner/two": [.success(result(runs: [], remaining: 500))]
+            ]),
+            clock: clock,
+            random: DeterministicPollRandomSource(values: [0.5, 0.5])
+        )
+        await scheduler.updateRepositories([
+            repository("owner/one", pushedAt: nil),
+            repository("owner/two", pushedAt: nil)
+        ])
+        await scheduler.reconcile(trigger: .launch)
+
+        await scheduler.observeRateLimit(GitHubRateLimit(remaining: 499, resetAt: now.addingTimeInterval(60)))
+        var snapshot = await scheduler.snapshot()
+        XCTAssertTrue(snapshot.isRateLimitDegraded)
+        XCTAssertEqual(snapshot.rateLimit.remaining, 499)
+        XCTAssertEqual(interval(for: "owner/one", in: snapshot), 2_400)
+        XCTAssertEqual(interval(for: "owner/two", in: snapshot), 2_400)
+
+        await scheduler.observeRateLimit(GitHubRateLimit(remaining: 500, resetAt: nil))
+        snapshot = await scheduler.snapshot()
+        XCTAssertFalse(snapshot.isRateLimitDegraded)
+        XCTAssertEqual(snapshot.rateLimit.remaining, 500)
+        XCTAssertEqual(interval(for: "owner/one", in: snapshot), 600)
+        XCTAssertEqual(interval(for: "owner/two", in: snapshot), 600)
+    }
+
     func testStartAndWakePerformFullReconciliationAndRecordOneSession() async {
         let clock = ManualPollClock(now: now)
         let poller = ScriptedRunPoller(steps: [

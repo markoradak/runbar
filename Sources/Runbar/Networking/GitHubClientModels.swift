@@ -20,6 +20,20 @@ struct GitHubEndpoint: Hashable, Sendable {
             queryItems: [.init(name: "per_page", value: String(perPage))]
         )
     }
+
+    static func actionsJobs(
+        repository: RepoIdentity,
+        runID: Int64,
+        perPage: Int = 100
+    ) -> GitHubEndpoint {
+        GitHubEndpoint(
+            pathSegments: [
+                "repos", repository.owner, repository.name, "actions", "runs",
+                String(runID), "jobs"
+            ],
+            queryItems: [.init(name: "per_page", value: String(perPage))]
+        )
+    }
 }
 
 enum GitHubURLCanonicalizer {

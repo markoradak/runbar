@@ -130,6 +130,16 @@ actor PollScheduler: LocalPushPolling {
         await emitSnapshot()
     }
 
+    func observeRateLimit(_ rateLimit: GitHubRateLimit) async {
+        let mergedRateLimit = GitHubRateLimit(
+            remaining: rateLimit.remaining ?? latestRateLimit.remaining,
+            resetAt: rateLimit.resetAt ?? latestRateLimit.resetAt
+        )
+        apply(rateLimit: mergedRateLimit, at: await clock.now())
+        if isRunning { restartLoop() }
+        await emitSnapshot()
+    }
+
     func handleWake() async {
         guard isRunning else { return }
         loopTask?.cancel()
