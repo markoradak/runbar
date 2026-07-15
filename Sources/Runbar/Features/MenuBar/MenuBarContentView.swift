@@ -18,9 +18,7 @@ struct MenuBarContentView: View {
             if let login = model.authenticatedLogin {
                 Label("Connected as @\(login)", systemImage: "checkmark.circle.fill")
                     .accessibilityIdentifier("menu-authenticated-github-login")
-                Text("Repository discovery starts in M1.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                schedulerSummary
             } else {
                 Text("Add a fine-grained GitHub token in Settings to begin.")
                     .foregroundStyle(.secondary)
@@ -29,10 +27,17 @@ struct MenuBarContentView: View {
             Divider()
 
             HStack {
+                if let remaining = model.pollSchedulerSnapshot.rateLimit.remaining {
+                    Text("Rate limit: \(remaining)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(
+                            model.pollSchedulerSnapshot.isRateLimitDegraded ? Color.orange : Color.secondary
+                        )
+                }
+                Spacer()
                 SettingsLink {
                     Label("Settings", systemImage: "gear")
                 }
-                Spacer()
                 Button("Quit") {
                     NSApplication.shared.terminate(nil)
                 }
@@ -44,8 +49,35 @@ struct MenuBarContentView: View {
     }
 
     @ViewBuilder
+    private var schedulerSummary: some View {
+        if model.pollSchedulerSnapshot.isRateLimitDegraded {
+            Label("Polling slowed to protect the GitHub rate limit", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        } else if model.pollSchedulerSnapshot.isRunning {
+            let counts = model.pollSchedulerSnapshot.tierCounts
+            Text(
+                "Polling \(model.pollSchedulerSnapshot.repositories.count) repos · " +
+                "\(counts[.hot, default: 0]) hot · " +
+                "\(counts[.warm, default: 0]) warm · " +
+                "\(counts[.cold, default: 0]) cold"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        } else {
+            Text("Polling is waiting for repository discovery.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
     private var connectionBadge: some View {
         switch model.state {
+        case .authenticated where model.pollSchedulerSnapshot.isRateLimitDegraded:
+            Label("Degraded", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+                .font(.caption)
         case .authenticated:
             Label("Connected", systemImage: "circle.fill")
                 .foregroundStyle(.green)

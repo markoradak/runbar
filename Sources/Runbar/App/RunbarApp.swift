@@ -9,45 +9,45 @@ struct RunbarApp: App {
         let authValidator = GitHubAuthValidator.live()
 
         let githubClient: GitHubClient?
-        let githubInitializationError: String?
+        let repoDiscovery: RepoDiscovery?
+        let pollScheduler: PollScheduler?
+        let initializationError: String?
         do {
-            let store = try SQLiteGitHubStore.production()
-            githubClient = GitHubClient(store: store)
-            githubInitializationError = nil
+            let discoveryStore = try SQLiteStore.production()
+            let githubStore = try SQLiteGitHubStore.production()
+            let pollStore = try SQLitePollStore.production()
+            let client = GitHubClient(store: githubStore)
+            githubClient = client
+            repoDiscovery = RepoDiscovery(
+                remoteDiscovery: GitHubRemoteRepoDiscovery(client: client),
+                store: discoveryStore
+            )
+            pollScheduler = PollScheduler(
+                poller: GitHubRunPoller(client: client, store: pollStore),
+                credentialProvider: KeychainPollCredentialProvider(credentialStore: credentialStore),
+                recorder: pollStore
+            )
+            initializationError = nil
         } catch {
             githubClient = nil
-            githubInitializationError = String(describing: error)
-        }
-
-        let repoDiscovery: RepoDiscovery?
-        let discoveryInitializationError: String?
-        if let githubClient {
-            do {
-                let store = try SQLiteStore.production()
-                repoDiscovery = RepoDiscovery(
-                    remoteDiscovery: GitHubRemoteRepoDiscovery(client: githubClient),
-                    store: store
-                )
-                discoveryInitializationError = nil
-            } catch {
-                repoDiscovery = nil
-                discoveryInitializationError = String(describing: error)
-            }
-        } else {
             repoDiscovery = nil
-            discoveryInitializationError = githubInitializationError
+            pollScheduler = nil
+            initializationError = String(describing: error)
         }
 
-        _settingsModel = StateObject(
-            wrappedValue: SettingsModel(
-                credentialStore: credentialStore,
-                authValidator: authValidator,
-                repoDiscovery: repoDiscovery,
-                discoveryInitializationError: discoveryInitializationError,
-                githubClient: githubClient,
-                githubInitializationError: githubInitializationError
-            )
+        let model = SettingsModel(
+            credentialStore: credentialStore,
+            authValidator: authValidator,
+            repoDiscovery: repoDiscovery,
+            discoveryInitializationError: initializationError,
+            githubClient: githubClient,
+            githubInitializationError: initializationError,
+            pollScheduler: pollScheduler
         )
+        _settingsModel = StateObject(wrappedValue: model)
+        Task { @MainActor in
+            await model.loadIfNeeded()
+        }
     }
 
     var body: some Scene {

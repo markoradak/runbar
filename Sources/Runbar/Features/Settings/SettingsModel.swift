@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import os
 
@@ -35,6 +36,7 @@ final class SettingsModel: ObservableObject {
     @Published private(set) var etagVerificationState: ETagVerificationState = .idle
     @Published private(set) var githubDebugEntries: [GitHubDebugEntry] = []
     @Published private(set) var repositoryAccessNotice: String?
+    @Published private(set) var pollSchedulerSnapshot: PollSchedulerSnapshot = .idle
 
     private static let logger = Logger(subsystem: "app.runbar.Runbar", category: "authentication")
     private static let discoveryLogger = Logger(subsystem: "app.runbar.Runbar", category: "discovery")
@@ -45,8 +47,11 @@ final class SettingsModel: ObservableObject {
     private let discoveryInitializationError: String?
     private let githubClient: GitHubClient?
     private let githubInitializationError: String?
+    private let pollScheduler: PollScheduler?
     private var hasLoaded = false
+    private var isObservingPollScheduler = false
     private var periodicRefreshTask: Task<Void, Never>?
+    private var wakeObservationTask: Task<Void, Never>?
 
     init(
         credentialStore: any CredentialStore,
@@ -54,7 +59,8 @@ final class SettingsModel: ObservableObject {
         repoDiscovery: RepoDiscovery? = nil,
         discoveryInitializationError: String? = nil,
         githubClient: GitHubClient? = nil,
-        githubInitializationError: String? = nil
+        githubInitializationError: String? = nil,
+        pollScheduler: PollScheduler? = nil
     ) {
         self.credentialStore = credentialStore
         self.authValidator = authValidator
@@ -62,6 +68,12 @@ final class SettingsModel: ObservableObject {
         self.discoveryInitializationError = discoveryInitializationError
         self.githubClient = githubClient
         self.githubInitializationError = githubInitializationError
+        self.pollScheduler = pollScheduler
+    }
+
+    deinit {
+        periodicRefreshTask?.cancel()
+        wakeObservationTask?.cancel()
     }
 
     var isBusy: Bool {
@@ -94,7 +106,10 @@ final class SettingsModel: ObservableObject {
     }
 
     var menuBarSystemImage: String {
-        authenticatedLogin == nil ? "circle.dashed" : "circle.fill"
+        guard authenticatedLogin != nil else { return "circle.dashed" }
+        return pollSchedulerSnapshot.isRateLimitDegraded
+            ? "exclamationmark.triangle.fill"
+            : "circle.fill"
     }
 
     var includedRepositoryCount: Int {
@@ -108,6 +123,8 @@ final class SettingsModel: ObservableObject {
     func loadIfNeeded() async {
         guard !hasLoaded else { return }
         hasLoaded = true
+        await startPollSchedulerObservation()
+        startWakeObservation()
         await loadStoredCredential()
         startPeriodicRefresh()
     }
@@ -119,12 +136,14 @@ final class SettingsModel: ObservableObject {
         do {
             guard let storedToken = try credentialStore.readToken() else {
                 state = .signedOut
+                await stopPollScheduler()
                 await refreshDiscovery(token: nil)
                 return
             }
             token = storedToken
         } catch {
             state = .failed(message: safeCredentialMessage(error), hasStoredCredential: false)
+            await stopPollScheduler()
             await refreshDiscovery(token: nil)
             return
         }
@@ -138,6 +157,7 @@ final class SettingsModel: ObservableObject {
         } catch {
             state = .failed(message: safeAuthMessage(error), hasStoredCredential: true)
             Self.logger.error("Stored GitHub credential validation failed")
+            await stopPollScheduler()
             await refreshDiscovery(token: nil)
         }
     }
@@ -177,7 +197,10 @@ final class SettingsModel: ObservableObject {
             tokenInput = ""
             state = .signedOut
             Self.logger.notice("Removed the GitHub credential from Keychain")
-            Task { await refreshDiscovery(token: nil) }
+            Task {
+                await stopPollScheduler()
+                await refreshDiscovery(token: nil)
+            }
         } catch {
             state = .failed(message: safeCredentialMessage(error), hasStoredCredential: true)
         }
@@ -223,6 +246,7 @@ final class SettingsModel: ObservableObject {
                 discoveredRepositories[index].isExcluded = isExcluded
             }
             selectDefaultVerificationRepositoryIfNeeded()
+            await configurePollScheduler()
         } catch {
             discoveryState = .failed(message: safeDiscoveryMessage(error))
         }
@@ -308,6 +332,68 @@ final class SettingsModel: ObservableObject {
         }
     }
 
+    private func startWakeObservation() {
+        guard wakeObservationTask == nil, pollScheduler != nil else { return }
+        wakeObservationTask = Task { @MainActor [weak self] in
+            let notifications = NSWorkspace.shared.notificationCenter.notifications(
+                named: NSWorkspace.didWakeNotification
+            )
+            for await _ in notifications {
+                guard !Task.isCancelled, let self, let scheduler = self.pollScheduler else { return }
+                await scheduler.handleWake()
+            }
+        }
+    }
+
+    private func startPollSchedulerObservation() async {
+        guard !isObservingPollScheduler, let pollScheduler else { return }
+        isObservingPollScheduler = true
+        await pollScheduler.setEventHandler { [weak self] snapshot in
+            await self?.receivePollSchedulerSnapshot(snapshot)
+        }
+    }
+
+    private func receivePollSchedulerSnapshot(_ snapshot: PollSchedulerSnapshot) {
+        pollSchedulerSnapshot = snapshot
+        if snapshot.hasAuthenticationFailure, hasStoredCredential {
+            state = .failed(
+                message: "GitHub rejected the saved credential while polling.",
+                hasStoredCredential: true
+            )
+        }
+    }
+
+    private func configurePollScheduler() async {
+        guard let pollScheduler else { return }
+        guard authenticatedLogin != nil else {
+            await stopPollScheduler()
+            return
+        }
+        let repositories = verificationRepositories.map {
+            PollRepository(key: $0.id, identity: $0.identity, pushedAt: $0.pushedAt)
+        }
+        guard !repositories.isEmpty else {
+            await stopPollScheduler()
+            return
+        }
+
+        let snapshot = await pollScheduler.snapshot()
+        if snapshot.isRunning {
+            await pollScheduler.updateRepositories(repositories)
+        } else {
+            await pollScheduler.start(repositories: repositories)
+        }
+    }
+
+    private func stopPollScheduler() async {
+        guard let pollScheduler else { return }
+        let snapshot = await pollScheduler.snapshot()
+        if snapshot.isRunning || snapshot.sessionStartedAt != nil {
+            await pollScheduler.stop()
+        }
+        pollSchedulerSnapshot = await pollScheduler.snapshot()
+    }
+
     private func refreshDiscovery(token: String?) async {
         guard let repoDiscovery else {
             setDiscoveryInitializationFailure()
@@ -321,6 +407,7 @@ final class SettingsModel: ObservableObject {
             skippedLocalRepositories = snapshot.skippedLocalRepositories
             selectDefaultVerificationRepositoryIfNeeded()
             discoveryState = .loaded
+            await configurePollScheduler()
             Self.discoveryLogger.notice(
                 "Discovered \(snapshot.repositories.count, privacy: .public) repositories and excluded \(snapshot.skippedLocalRepositories.count, privacy: .public) local candidates"
             )
@@ -353,6 +440,7 @@ final class SettingsModel: ObservableObject {
             }
             selectDefaultVerificationRepositoryIfNeeded()
             etagVerificationState = .failed(message: error.userMessage)
+            Task { await configurePollScheduler() }
         default:
             etagVerificationState = .failed(message: error.userMessage)
         }

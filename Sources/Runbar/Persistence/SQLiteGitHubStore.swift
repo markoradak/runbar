@@ -33,6 +33,8 @@ actor SQLiteGitHubStore: GitHubClientStoring {
                 database: handle,
                 sql: """
                 PRAGMA foreign_keys = ON;
+                PRAGMA journal_mode = WAL;
+                PRAGMA busy_timeout = 5000;
                 CREATE TABLE IF NOT EXISTS etags (
                     canonical_url TEXT PRIMARY KEY NOT NULL,
                     etag TEXT NOT NULL,

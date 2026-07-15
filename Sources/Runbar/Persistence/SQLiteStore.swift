@@ -43,6 +43,8 @@ actor SQLiteStore: RepoDiscoveryStoring {
                 database: connection,
                 sql: """
                 PRAGMA foreign_keys = ON;
+                PRAGMA journal_mode = WAL;
+                PRAGMA busy_timeout = 5000;
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY NOT NULL,
                     value TEXT NOT NULL
@@ -173,15 +175,19 @@ actor SQLiteStore: RepoDiscoveryStoring {
     func saveDiscoverySnapshot(_ snapshot: RepoDiscoverySnapshot) async throws {
         try execute("BEGIN IMMEDIATE TRANSACTION")
         do {
+            let existingRepositoryKeys = try repositoryKeys()
             try execute("DELETE FROM workflows")
-            try execute("DELETE FROM repos")
             try execute("DELETE FROM scan_skips")
 
             for repository in snapshot.repositories {
-                try insert(repository: repository)
+                try upsert(repository: repository)
                 for workflow in repository.workflows {
                     try insert(workflow: workflow, repositoryKey: repository.id)
                 }
+            }
+            let retainedRepositoryKeys = Set(snapshot.repositories.map(\.id))
+            for repositoryKey in existingRepositoryKeys.subtracting(retainedRepositoryKeys) {
+                try deleteRepository(repositoryKey)
             }
             for skipped in snapshot.skippedLocalRepositories {
                 try insert(skipped: skipped)
@@ -193,11 +199,19 @@ actor SQLiteStore: RepoDiscoveryStoring {
         }
     }
 
-    private func insert(repository: DiscoveredRepository) throws {
+    private func upsert(repository: DiscoveredRepository) throws {
         let statement = try prepare(
             """
             INSERT INTO repos(repo_key, owner, name, source, local_path, pushed_at, excluded, accessible)
             VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(repo_key) DO UPDATE SET
+                owner = excluded.owner,
+                name = excluded.name,
+                source = excluded.source,
+                local_path = excluded.local_path,
+                pushed_at = excluded.pushed_at,
+                excluded = excluded.excluded,
+                accessible = excluded.accessible
             """
         )
         defer { sqlite3_finalize(statement) }
@@ -226,6 +240,23 @@ actor SQLiteStore: RepoDiscoveryStoring {
         sqlite3_bind_int(preference, 2, repository.isExcluded ? 1 : 0)
         sqlite3_bind_int(preference, 3, repository.isAccessible ? 1 : 0)
         try stepDone(preference)
+    }
+
+    private func repositoryKeys() throws -> Set<String> {
+        let statement = try prepare("SELECT repo_key FROM repos")
+        defer { sqlite3_finalize(statement) }
+        var keys: Set<String> = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let key = text(statement, column: 0) { keys.insert(key) }
+        }
+        return keys
+    }
+
+    private func deleteRepository(_ repositoryKey: String) throws {
+        let statement = try prepare("DELETE FROM repos WHERE repo_key = ?")
+        defer { sqlite3_finalize(statement) }
+        bind(repositoryKey, to: statement, index: 1)
+        try stepDone(statement)
     }
 
     private func insert(workflow: WorkflowMetadata, repositoryKey: String) throws {

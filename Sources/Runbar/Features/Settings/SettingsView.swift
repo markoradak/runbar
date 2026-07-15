@@ -8,6 +8,7 @@ struct SettingsView: View {
         Form {
             accountSection
             discoverySection
+            PollSchedulerStatusView(model: model)
             GitHubDebugPane(model: model)
             storageSection
         }
