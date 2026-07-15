@@ -136,10 +136,7 @@ struct RunbarMenuView: View {
             .foregroundStyle(.secondary)
             .lineLimit(1)
 
-            ProgressView()
-                .progressViewStyle(.linear)
-                .controlSize(.small)
-                .accessibilityLabel("Workflow is active")
+            progressView(for: item)
 
             DisclosureGroup(isExpanded: jobsBinding(for: item)) {
                 jobsContent(for: item)
@@ -151,6 +148,48 @@ struct RunbarMenuView: View {
         }
         .padding(10)
         .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    @ViewBuilder
+    private func progressView(for item: MenuBarRun) -> some View {
+        switch WorkflowRunPresentation.progressState(
+            startedAt: item.run.runStartedAt,
+            medianDurationSeconds: item.medianDurationSeconds,
+            now: model.menuBarNow
+        ) {
+        case .noHistory:
+            Text("No duration history")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("progress-no-history-\(item.id)")
+        case let .estimated(elapsedSeconds, medianDurationSeconds):
+            VStack(alignment: .leading, spacing: 3) {
+                ProgressView(
+                    value: Double(elapsedSeconds),
+                    total: Double(medianDurationSeconds)
+                )
+                .progressViewStyle(.linear)
+                .controlSize(.small)
+                HStack {
+                    Text("Median \(WorkflowRunPresentation.durationText(seconds: medianDurationSeconds))")
+                    Spacer()
+                    Text("~\(WorkflowRunPresentation.durationText(seconds: max(0, medianDurationSeconds - elapsedSeconds))) remaining")
+                }
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+            }
+            .accessibilityIdentifier("progress-estimated-\(item.id)")
+        case let .runningLong(_, medianDurationSeconds):
+            VStack(alignment: .leading, spacing: 3) {
+                ProgressView()
+                    .progressViewStyle(.linear)
+                    .controlSize(.small)
+                Text("Running long · median \(WorkflowRunPresentation.durationText(seconds: medianDurationSeconds))")
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.orange)
+            }
+            .accessibilityIdentifier("progress-running-long-\(item.id)")
+        }
     }
 
     private func recentRow(_ item: MenuBarRun) -> some View {

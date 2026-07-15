@@ -162,12 +162,16 @@ actor SQLiteMenuBarStore: MenuBarDataStoring {
                   let owner = text(statement, column: 17),
                   let name = text(statement, column: 18)
             else { continue }
+            let workflowID = sqlite3_column_int64(statement, 2)
+            let medianDurationSeconds = status == "queued" || status == "in_progress"
+                ? try loadMedianDurationSeconds(repositoryKey: repositoryKey, workflowID: workflowID)
+                : nil
             rows.append(
                 MenuBarRun(
                     run: WorkflowRun(
                         id: sqlite3_column_int64(statement, 0),
                         repositoryKey: repositoryKey,
-                        workflowID: sqlite3_column_int64(statement, 2),
+                        workflowID: workflowID,
                         workflowName: workflowName,
                         status: status,
                         conclusion: text(statement, column: 5),
@@ -184,11 +188,45 @@ actor SQLiteMenuBarStore: MenuBarDataStoring {
                         triggeringActorLogin: text(statement, column: 16)
                     ),
                     repository: RepoIdentity(owner: owner, name: name),
-                    matchesLocalHEAD: sqlite3_column_int(statement, 19) != 0
+                    matchesLocalHEAD: sqlite3_column_int(statement, 19) != 0,
+                    medianDurationSeconds: medianDurationSeconds
                 )
             )
         }
         return rows
+    }
+
+    private func loadMedianDurationSeconds(
+        repositoryKey: String,
+        workflowID: Int64
+    ) throws -> Int? {
+        let statement = try prepare(
+            """
+            SELECT r.updated_at - r.run_started_at
+            FROM runs r
+            WHERE r.repo_key = ?
+              AND r.workflow_id = ?
+              AND r.status = 'completed'
+              AND r.run_started_at IS NOT NULL
+              AND r.updated_at > r.run_started_at
+            ORDER BY r.updated_at DESC, r.id DESC
+            LIMIT 10
+            """
+        )
+        defer { sqlite3_finalize(statement) }
+        bind(repositoryKey, to: statement, index: 1)
+        sqlite3_bind_int64(statement, 2, workflowID)
+        var durations: [Int] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            durations.append(Int(sqlite3_column_double(statement, 0).rounded()))
+        }
+        guard !durations.isEmpty else { return nil }
+        durations.sort()
+        let middle = durations.count / 2
+        if durations.count.isMultiple(of: 2) {
+            return (durations[middle - 1] + durations[middle]) / 2
+        }
+        return durations[middle]
     }
 
     private func date(_ statement: OpaquePointer, column: Int32) -> Date? {

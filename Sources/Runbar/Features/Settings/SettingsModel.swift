@@ -44,6 +44,9 @@ final class SettingsModel: ObservableObject {
     @Published private(set) var workflowJobs: [Int64: WorkflowJobsState] = [:]
     @Published private(set) var isManualRefreshRunning = false
 
+    @Published private(set) var notificationAuthorizationState: RunNotificationAuthorizationState = .notDetermined
+    @Published private(set) var notificationsFailuresOnly: Bool
+
     private static let logger = Logger(subsystem: "app.runbar.Runbar", category: "authentication")
     private static let discoveryLogger = Logger(subsystem: "app.runbar.Runbar", category: "discovery")
 
@@ -58,12 +61,16 @@ final class SettingsModel: ObservableObject {
     private let menuBarStore: (any MenuBarDataStoring)?
     private let workflowJobsLoader: (any WorkflowJobsLoading)?
     private let menuBarClock: any MenuBarClock
+    private let notificationNotifier: (any RunCompletionNotifying)?
+    private let notificationPreferenceStore: any NotificationPreferenceStoring
     private var hasLoaded = false
     private var isObservingPollScheduler = false
     private var periodicRefreshTask: Task<Void, Never>?
     private var wakeObservationTask: Task<Void, Never>?
     private var menuBarTimerTask: Task<Void, Never>?
     private var isMenuBarVisible = false
+    private var hasNotificationBaseline = false
+    private var knownCompletedRunIDs: Set<Int64> = []
 
     init(
         credentialStore: any CredentialStore,
@@ -76,7 +83,9 @@ final class SettingsModel: ObservableObject {
         gitWatcher: GitWatcher? = nil,
         menuBarStore: (any MenuBarDataStoring)? = nil,
         workflowJobsLoader: (any WorkflowJobsLoading)? = nil,
-        menuBarClock: any MenuBarClock = SystemMenuBarClock()
+        menuBarClock: any MenuBarClock = SystemMenuBarClock(),
+        notificationNotifier: (any RunCompletionNotifying)? = nil,
+        notificationPreferenceStore: any NotificationPreferenceStoring = UserDefaultsNotificationPreferenceStore()
     ) {
         self.credentialStore = credentialStore
         self.authValidator = authValidator
@@ -89,6 +98,9 @@ final class SettingsModel: ObservableObject {
         self.menuBarStore = menuBarStore
         self.workflowJobsLoader = workflowJobsLoader
         self.menuBarClock = menuBarClock
+        self.notificationNotifier = notificationNotifier
+        self.notificationPreferenceStore = notificationPreferenceStore
+        notificationsFailuresOnly = notificationPreferenceStore.failuresOnly()
     }
 
     deinit {
@@ -149,6 +161,7 @@ final class SettingsModel: ObservableObject {
         await startPollSchedulerObservation()
         startWakeObservation()
         await refreshMenuBarRuns()
+        await requestNotificationAuthorization()
         await loadStoredCredential()
         startPeriodicRefresh()
     }
@@ -356,11 +369,40 @@ final class SettingsModel: ObservableObject {
         guard let menuBarStore else { return }
         do {
             menuBarNow = await menuBarClock.now()
-            menuBarRuns = try await menuBarStore.loadMenuBarRuns(recentLimit: 20)
+            let snapshot = try await menuBarStore.loadMenuBarRuns(recentLimit: 20)
+            menuBarRuns = snapshot
+            await processCompletionNotifications(in: snapshot)
             menuBarLoadError = nil
             restartMenuBarTimerIfNeeded()
         } catch {
             menuBarLoadError = "Runbar could not read persisted workflow runs."
+        }
+    }
+
+    func requestNotificationAuthorization() async {
+        guard let notificationNotifier else { return }
+        notificationAuthorizationState = await notificationNotifier.requestAuthorization()
+    }
+
+    func setNotificationsFailuresOnly(_ failuresOnly: Bool) {
+        notificationsFailuresOnly = failuresOnly
+        notificationPreferenceStore.setFailuresOnly(failuresOnly)
+    }
+
+    private func processCompletionNotifications(in snapshot: MenuBarRunSnapshot) async {
+        let completedIDs = Set(snapshot.recent.map(\.id))
+        guard hasNotificationBaseline else {
+            hasNotificationBaseline = true
+            knownCompletedRunIDs = completedIDs
+            return
+        }
+        let newCompletions = snapshot.recent.filter { !knownCompletedRunIDs.contains($0.id) }
+        knownCompletedRunIDs = completedIDs
+        guard notificationAuthorizationState == .authorized, let notificationNotifier else { return }
+        for item in newCompletions {
+            guard let notification = RunCompletionNotification(run: item) else { continue }
+            if notificationsFailuresOnly && !notification.isFailure { continue }
+            try? await notificationNotifier.deliver(notification)
         }
     }
 

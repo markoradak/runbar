@@ -66,6 +66,35 @@ final class MenuBarPresentationTests: XCTestCase {
         )
     }
 
+    func testProgressUsesNoHistoryEstimateAndHonestOverrunStates() {
+        let start = Date(timeIntervalSince1970: 10_000)
+
+        XCTAssertEqual(
+            WorkflowRunPresentation.progressState(
+                startedAt: start,
+                medianDurationSeconds: nil,
+                now: start.addingTimeInterval(30)
+            ),
+            .noHistory
+        )
+
+        let estimated = WorkflowRunPresentation.progressState(
+            startedAt: start,
+            medianDurationSeconds: 100,
+            now: start.addingTimeInterval(40)
+        )
+        XCTAssertEqual(estimated, .estimated(elapsedSeconds: 40, medianDurationSeconds: 100))
+        XCTAssertEqual(estimated.fractionCompleted ?? -1, 0.4, accuracy: 0.0001)
+
+        let overrun = WorkflowRunPresentation.progressState(
+            startedAt: start,
+            medianDurationSeconds: 100,
+            now: start.addingTimeInterval(101)
+        )
+        XCTAssertEqual(overrun, .runningLong(elapsedSeconds: 101, medianDurationSeconds: 100))
+        XCTAssertNil(overrun.fractionCompleted)
+    }
+
     private func menuRun(conclusion: String?, updatedAt: Date) -> MenuBarRun {
         MenuBarRun(
             run: WorkflowRun(

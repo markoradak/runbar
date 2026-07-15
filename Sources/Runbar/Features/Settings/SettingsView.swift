@@ -8,6 +8,7 @@ struct SettingsView: View {
         Form {
             accountSection
             discoverySection
+            notificationsSection
             PollSchedulerStatusView(model: model)
             GitHubDebugPane(model: model)
             storageSection
@@ -82,6 +83,34 @@ struct SettingsView: View {
             }
 
             Text("\(model.includedRepositoryCount) included; \(model.discoveredRepositories.count - model.includedRepositoryCount) excluded by deny-list")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var notificationsSection: some View {
+        Section("Notifications") {
+            switch model.notificationAuthorizationState {
+            case .authorized:
+                Label("Run completion notifications are enabled", systemImage: "bell.badge.fill")
+                    .foregroundStyle(.green)
+            case .denied:
+                Label("Notifications are disabled in System Settings", systemImage: "bell.slash.fill")
+                    .foregroundStyle(.orange)
+            case .notDetermined:
+                Button("Enable run completion notifications") {
+                    Task { await model.requestNotificationAuthorization() }
+                }
+            }
+
+            Toggle(
+                "Failures only",
+                isOn: Binding(
+                    get: { model.notificationsFailuresOnly },
+                    set: { model.setNotificationsFailuresOnly($0) }
+                )
+            )
+            Text("Notifications include the conclusion and open the workflow run on GitHub when clicked.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

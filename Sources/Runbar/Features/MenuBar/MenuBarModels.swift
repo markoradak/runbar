@@ -4,6 +4,19 @@ struct MenuBarRun: Identifiable, Equatable, Sendable {
     let run: WorkflowRun
     let repository: RepoIdentity
     let matchesLocalHEAD: Bool
+    let medianDurationSeconds: Int?
+
+    init(
+        run: WorkflowRun,
+        repository: RepoIdentity,
+        matchesLocalHEAD: Bool,
+        medianDurationSeconds: Int? = nil
+    ) {
+        self.run = run
+        self.repository = repository
+        self.matchesLocalHEAD = matchesLocalHEAD
+        self.medianDurationSeconds = medianDurationSeconds
+    }
 
     var id: Int64 { run.id }
 }
@@ -87,6 +100,16 @@ enum MenuBarIconState: Equatable, Sendable {
 }
 
 enum WorkflowRunPresentation {
+    enum ProgressState: Equatable, Sendable {
+        case noHistory
+        case estimated(elapsedSeconds: Int, medianDurationSeconds: Int)
+        case runningLong(elapsedSeconds: Int, medianDurationSeconds: Int)
+
+        var fractionCompleted: Double? {
+            guard case let .estimated(elapsedSeconds, medianDurationSeconds) = self else { return nil }
+            return Double(elapsedSeconds) / Double(medianDurationSeconds)
+        }
+    }
     static func elapsedSeconds(startedAt: Date?, now: Date) -> Int? {
         guard let startedAt else { return nil }
         return max(0, Int(now.timeIntervalSince(startedAt)))
@@ -118,6 +141,27 @@ enum WorkflowRunPresentation {
         case 3_600..<86_400: return "\(seconds / 3_600)h ago"
         default: return "\(seconds / 86_400)d ago"
         }
+    }
+
+    static func progressState(
+        startedAt: Date?,
+        medianDurationSeconds: Int?,
+        now: Date
+    ) -> ProgressState {
+        guard let elapsed = elapsedSeconds(startedAt: startedAt, now: now),
+              let medianDurationSeconds,
+              medianDurationSeconds > 0
+        else { return .noHistory }
+        if elapsed > medianDurationSeconds {
+            return .runningLong(
+                elapsedSeconds: elapsed,
+                medianDurationSeconds: medianDurationSeconds
+            )
+        }
+        return .estimated(
+            elapsedSeconds: elapsed,
+            medianDurationSeconds: medianDurationSeconds
+        )
     }
 
     static func isFailure(_ conclusion: String?) -> Bool {

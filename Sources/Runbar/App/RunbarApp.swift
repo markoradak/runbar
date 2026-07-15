@@ -57,7 +57,8 @@ struct RunbarApp: App {
             pollScheduler: pollScheduler,
             gitWatcher: gitWatcher,
             menuBarStore: menuBarStore,
-            workflowJobsLoader: workflowJobsLoader
+            workflowJobsLoader: workflowJobsLoader,
+            notificationNotifier: SystemRunCompletionNotifier()
         )
         _settingsModel = StateObject(wrappedValue: model)
         Task { @MainActor in

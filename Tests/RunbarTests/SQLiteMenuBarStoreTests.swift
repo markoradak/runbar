@@ -55,7 +55,78 @@ final class SQLiteMenuBarStoreTests: XCTestCase {
         )
         try await menuStore.recordMenuBarTimerTick(tick)
         let persistedTicks = try await menuStore.timerTicks()
-        XCTAssertEqual(persistedTicks, [tick])
+        XCTAssertEqual(persistedTicks.count, 1)
+        XCTAssertEqual(persistedTicks.first?.timestamp.timeIntervalSince1970 ?? 0, tick.timestamp.timeIntervalSince1970, accuracy: 0.001)
+        XCTAssertEqual(persistedTicks.first?.runID, tick.runID)
+        XCTAssertEqual(persistedTicks.first?.elapsedSeconds, tick.elapsedSeconds)
+        XCTAssertEqual(persistedTicks.first?.source, tick.source)
+    }
+
+    func testActiveRunMedianUsesOnlyTenMostRecentCompletedRunsOfSameWorkflow() async throws {
+        let databaseURL = temporaryDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: databaseURL.deletingLastPathComponent()) }
+
+        let repositoryStore = try SQLiteStore(path: databaseURL.path)
+        let pollStore = try SQLitePollStore(path: databaseURL.path)
+        _ = try SQLiteGitWatcherStore(path: databaseURL.path)
+        let menuStore = try SQLiteMenuBarStore(path: databaseURL.path)
+        let repository = repository(owner: "median", name: "fixture")
+        try await repositoryStore.saveDiscoverySnapshot(
+            RepoDiscoverySnapshot(codeRootPath: nil, repositories: [repository], skippedLocalRepositories: [])
+        )
+
+        let now = Date()
+        var runs = (0..<12).map { index in
+            let duration = TimeInterval((index + 1) * 10)
+            let completedAt = now.addingTimeInterval(TimeInterval(-index * 1_000))
+            return WorkflowRun(
+                id: Int64(index + 1),
+                repositoryKey: repository.id,
+                workflowID: 77,
+                workflowName: "Median CI",
+                status: "completed",
+                conclusion: "success",
+                runStartedAt: completedAt.addingTimeInterval(-duration),
+                createdAt: completedAt.addingTimeInterval(-duration),
+                updatedAt: completedAt,
+                headBranch: "main",
+                headSHA: "history-\(index)",
+                event: "push",
+                displayTitle: "Median CI",
+                htmlURL: "https://github.com/median/fixture/actions/runs/\(index + 1)",
+                runAttempt: 1,
+                actorLogin: nil,
+                triggeringActorLogin: nil
+            )
+        }
+        runs.append(
+            WorkflowRun(
+                id: 99,
+                repositoryKey: repository.id,
+                workflowID: 77,
+                workflowName: "Median CI",
+                status: "in_progress",
+                conclusion: nil,
+                runStartedAt: now.addingTimeInterval(-20),
+                createdAt: now.addingTimeInterval(-20),
+                updatedAt: now,
+                headBranch: "main",
+                headSHA: "active",
+                event: "workflow_dispatch",
+                displayTitle: "Median CI",
+                htmlURL: "https://github.com/median/fixture/actions/runs/99",
+                runAttempt: 1,
+                actorLogin: nil,
+                triggeringActorLogin: nil
+            )
+        )
+        try await pollStore.saveWorkflowRuns(runs, for: repository.id)
+
+        let snapshot = try await menuStore.loadMenuBarRuns(recentLimit: 20)
+
+        XCTAssertEqual(snapshot.running.count, 1)
+        XCTAssertEqual(snapshot.running[0].medianDurationSeconds, 55)
+        XCTAssertTrue(snapshot.recent.allSatisfy { $0.medianDurationSeconds == nil })
     }
 
     private func repository(owner: String, name: String) -> DiscoveredRepository {
