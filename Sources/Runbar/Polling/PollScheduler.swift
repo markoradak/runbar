@@ -1,6 +1,6 @@
 import Foundation
 
-actor PollScheduler {
+actor PollScheduler: LocalPushPolling {
     typealias EventHandler = @Sendable (PollSchedulerSnapshot) async -> Void
 
     private struct RepositoryState: Sendable {
@@ -24,7 +24,7 @@ actor PollScheduler {
     private let recorder: (any PollSchedulerRecording)?
 
     private var repositoryStates: [String: RepositoryState] = [:]
-    private var inFlightRepositoryKeys: Set<String> = []
+    private var inFlightPollCounts: [String: Int] = [:]
     private var loopTask: Task<Void, Never>?
     private var eventHandler: EventHandler?
     private var sessionID: Int64?
@@ -119,7 +119,7 @@ actor PollScheduler {
                 )
             }
         }
-        inFlightRepositoryKeys.formIntersection(incoming.keys)
+        inFlightPollCounts = inFlightPollCounts.filter { incoming[$0.key] != nil }
         sessionRepositoryCount = repositoryStates.count
         if let sessionID, let recorder {
             try? await recorder.updateSchedulerSession(sessionID, repositoryCount: repositoryStates.count)
@@ -168,6 +168,24 @@ actor PollScheduler {
         }
     }
 
+    func handleLocalPush(repositoryKey: String) async -> Date? {
+        guard var state = repositoryStates[repositoryKey], isRunning else { return nil }
+        let now = await clock.now()
+        state.tier = .hot
+        state.nextPollAt = now
+        repositoryStates[repositoryKey] = state
+        await emitSnapshot()
+        let pollStartedAt = await pollRepository(
+            key: repositoryKey,
+            trigger: .localPush,
+            allowsConcurrentPoll: true
+        )
+        if isRunning {
+            restartLoop()
+        }
+        return pollStartedAt
+    }
+
     func snapshot() -> PollSchedulerSnapshot {
         makeSnapshot()
     }
@@ -194,24 +212,36 @@ actor PollScheduler {
         }
     }
 
-    private func pollRepository(key: String, trigger: PollTrigger) async {
-        guard var state = repositoryStates[key], !inFlightRepositoryKeys.contains(key) else { return }
-        inFlightRepositoryKeys.insert(key)
-        defer { inFlightRepositoryKeys.remove(key) }
+    @discardableResult
+    private func pollRepository(
+        key: String,
+        trigger: PollTrigger,
+        allowsConcurrentPoll: Bool = false
+    ) async -> Date? {
+        guard var state = repositoryStates[key],
+              allowsConcurrentPoll || inFlightPollCounts[key, default: 0] == 0
+        else { return nil }
+        inFlightPollCounts[key, default: 0] += 1
+        defer {
+            let remaining = inFlightPollCounts[key, default: 1] - 1
+            if remaining == 0 { inFlightPollCounts.removeValue(forKey: key) }
+            else { inFlightPollCounts[key] = remaining }
+        }
 
         let token: String
         do {
             guard let storedToken = try await credentialProvider.readCredential(), !storedToken.isEmpty else {
                 await handleMissingCredential()
-                return
+                return nil
             }
             token = storedToken
         } catch {
             await handleMissingCredential()
-            return
+            return nil
         }
 
         let tierBefore = state.tier
+        let pollStartedAt = await clock.now()
         do {
             let result = try await poller.poll(repository: state.repository, token: token)
             totalPollAttempts += 1
@@ -266,6 +296,7 @@ actor PollScheduler {
             )
         }
         await emitSnapshot()
+        return pollStartedAt
     }
 
     private func handle(

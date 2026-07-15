@@ -37,6 +37,7 @@ final class SettingsModel: ObservableObject {
     @Published private(set) var githubDebugEntries: [GitHubDebugEntry] = []
     @Published private(set) var repositoryAccessNotice: String?
     @Published private(set) var pollSchedulerSnapshot: PollSchedulerSnapshot = .idle
+    @Published private(set) var gitWatchedRepositoryCount = 0
 
     private static let logger = Logger(subsystem: "app.runbar.Runbar", category: "authentication")
     private static let discoveryLogger = Logger(subsystem: "app.runbar.Runbar", category: "discovery")
@@ -48,6 +49,7 @@ final class SettingsModel: ObservableObject {
     private let githubClient: GitHubClient?
     private let githubInitializationError: String?
     private let pollScheduler: PollScheduler?
+    private let gitWatcher: GitWatcher?
     private var hasLoaded = false
     private var isObservingPollScheduler = false
     private var periodicRefreshTask: Task<Void, Never>?
@@ -60,7 +62,8 @@ final class SettingsModel: ObservableObject {
         discoveryInitializationError: String? = nil,
         githubClient: GitHubClient? = nil,
         githubInitializationError: String? = nil,
-        pollScheduler: PollScheduler? = nil
+        pollScheduler: PollScheduler? = nil,
+        gitWatcher: GitWatcher? = nil
     ) {
         self.credentialStore = credentialStore
         self.authValidator = authValidator
@@ -69,6 +72,7 @@ final class SettingsModel: ObservableObject {
         self.githubClient = githubClient
         self.githubInitializationError = githubInitializationError
         self.pollScheduler = pollScheduler
+        self.gitWatcher = gitWatcher
     }
 
     deinit {
@@ -246,7 +250,7 @@ final class SettingsModel: ObservableObject {
                 discoveredRepositories[index].isExcluded = isExcluded
             }
             selectDefaultVerificationRepositoryIfNeeded()
-            await configurePollScheduler()
+            await configureMonitoring()
         } catch {
             discoveryState = .failed(message: safeDiscoveryMessage(error))
         }
@@ -363,6 +367,26 @@ final class SettingsModel: ObservableObject {
         }
     }
 
+    private func configureMonitoring() async {
+        await configurePollScheduler()
+        await configureGitWatcher()
+    }
+
+    private func configureGitWatcher() async {
+        guard let gitWatcher else { return }
+        guard authenticatedLogin != nil else {
+            await gitWatcher.stop()
+            gitWatchedRepositoryCount = 0
+            return
+        }
+        let repositories = verificationRepositories.compactMap { repository -> GitWatchRepository? in
+            guard let localPath = repository.localPath else { return nil }
+            return GitWatchRepository(key: repository.id, localPath: localPath)
+        }
+        await gitWatcher.configure(repositories: repositories)
+        gitWatchedRepositoryCount = await gitWatcher.watchedRepositoryCount()
+    }
+
     private func configurePollScheduler() async {
         guard let pollScheduler else { return }
         guard authenticatedLogin != nil else {
@@ -386,6 +410,10 @@ final class SettingsModel: ObservableObject {
     }
 
     private func stopPollScheduler() async {
+        if let gitWatcher {
+            await gitWatcher.stop()
+            gitWatchedRepositoryCount = 0
+        }
         guard let pollScheduler else { return }
         let snapshot = await pollScheduler.snapshot()
         if snapshot.isRunning || snapshot.sessionStartedAt != nil {
@@ -407,7 +435,7 @@ final class SettingsModel: ObservableObject {
             skippedLocalRepositories = snapshot.skippedLocalRepositories
             selectDefaultVerificationRepositoryIfNeeded()
             discoveryState = .loaded
-            await configurePollScheduler()
+            await configureMonitoring()
             Self.discoveryLogger.notice(
                 "Discovered \(snapshot.repositories.count, privacy: .public) repositories and excluded \(snapshot.skippedLocalRepositories.count, privacy: .public) local candidates"
             )
@@ -440,7 +468,7 @@ final class SettingsModel: ObservableObject {
             }
             selectDefaultVerificationRepositoryIfNeeded()
             etagVerificationState = .failed(message: error.userMessage)
-            Task { await configurePollScheduler() }
+            Task { await configureMonitoring() }
         default:
             etagVerificationState = .failed(message: error.userMessage)
         }

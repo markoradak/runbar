@@ -26,6 +26,10 @@ struct PollSchedulerStatusView: View {
                 Spacer()
             }
 
+            Text("Watching \(model.gitWatchedRepositoryCount) local repositories for loose and packed Git refs.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             HStack {
                 Text("Poll attempts: \(model.pollSchedulerSnapshot.totalPollAttempts)")
                 Text("Quota-consuming: \(model.pollSchedulerSnapshot.quotaConsumingRequests)")

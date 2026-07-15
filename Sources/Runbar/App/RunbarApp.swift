@@ -11,27 +11,32 @@ struct RunbarApp: App {
         let githubClient: GitHubClient?
         let repoDiscovery: RepoDiscovery?
         let pollScheduler: PollScheduler?
+        let gitWatcher: GitWatcher?
         let initializationError: String?
         do {
             let discoveryStore = try SQLiteStore.production()
             let githubStore = try SQLiteGitHubStore.production()
             let pollStore = try SQLitePollStore.production()
+            let gitWatcherStore = try SQLiteGitWatcherStore.production()
             let client = GitHubClient(store: githubStore)
+            let scheduler = PollScheduler(
+                poller: GitHubRunPoller(client: client, store: pollStore),
+                credentialProvider: KeychainPollCredentialProvider(credentialStore: credentialStore),
+                recorder: pollStore
+            )
             githubClient = client
             repoDiscovery = RepoDiscovery(
                 remoteDiscovery: GitHubRemoteRepoDiscovery(client: client),
                 store: discoveryStore
             )
-            pollScheduler = PollScheduler(
-                poller: GitHubRunPoller(client: client, store: pollStore),
-                credentialProvider: KeychainPollCredentialProvider(credentialStore: credentialStore),
-                recorder: pollStore
-            )
+            pollScheduler = scheduler
+            gitWatcher = GitWatcher(localPushPoller: scheduler, recorder: gitWatcherStore)
             initializationError = nil
         } catch {
             githubClient = nil
             repoDiscovery = nil
             pollScheduler = nil
+            gitWatcher = nil
             initializationError = String(describing: error)
         }
 
@@ -42,7 +47,8 @@ struct RunbarApp: App {
             discoveryInitializationError: initializationError,
             githubClient: githubClient,
             githubInitializationError: initializationError,
-            pollScheduler: pollScheduler
+            pollScheduler: pollScheduler,
+            gitWatcher: gitWatcher
         )
         _settingsModel = StateObject(wrappedValue: model)
         Task { @MainActor in
