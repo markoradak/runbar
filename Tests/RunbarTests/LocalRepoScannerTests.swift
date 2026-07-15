@@ -53,6 +53,7 @@ final class LocalRepoScannerTests: XCTestCase {
         XCTAssertEqual(result.repositories.map(\.identity.fullName), ["owner/qualifying"])
         XCTAssertEqual(result.repositories[0].workflows.map(\.fileName), ["ci.yml", "nightly.yaml"])
         XCTAssertEqual(result.repositories[0].workflows[0].events, ["pull_request", "push"])
+        XCTAssertNotNil(result.repositories[0].localActivityAt)
         XCTAssertTrue(
             result.skippedRepositories.contains(
                 .init(relativePath: "github-only", reason: .githubWithoutWorkflowFiles)
@@ -75,6 +76,9 @@ final class LocalRepoScannerTests: XCTestCase {
             result.skippedRepositories,
             [.init(relativePath: "gitlab", reason: .nonGitHubOrigin)]
         )
+        XCTAssertEqual(LocalScanSkipReason.nonGitHubOrigin.userMessage, "Origin is not hosted on GitHub")
+        XCTAssertEqual(LocalScanSkipReason.noWorkflowFiles.userMessage, "No GitHub Actions workflow YAML")
+        XCTAssertEqual(LocalScanSkipReason.unreadableGitMetadata.userMessage, "Git origin could not be read")
     }
 
     func testWorktreeGitFileResolvesCommonConfig() throws {

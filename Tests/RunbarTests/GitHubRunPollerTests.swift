@@ -156,6 +156,7 @@ private actor CombinedRunPollStore: GitHubClientStoring, WorkflowRunStoring {
 
     func isRepositoryAccessible(_: String) async throws -> Bool { true }
     func markRepositoryInaccessible(_: String) async throws -> Bool { true }
+    func setRepositoryAccessible(_ isAccessible: Bool, repositoryKey: String) async throws {}
 
     func appendDebugEntry(_ entry: GitHubDebugEntry) async throws {
         debug.append(entry)

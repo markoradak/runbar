@@ -18,12 +18,40 @@ enum RepositorySource: String, Codable, Sendable {
     case local
     case remote
     case both
+
+    var userLabel: String {
+        switch self {
+        case .local: "On this Mac"
+        case .remote: "GitHub"
+        case .both: "On this Mac + GitHub"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .local, .both: "laptopcomputer"
+        case .remote: "icloud"
+        }
+    }
 }
 
 struct LocalRepository: Hashable, Sendable {
     let identity: RepoIdentity
     let localPath: String
     let workflows: [WorkflowMetadata]
+    let localActivityAt: Date?
+
+    init(
+        identity: RepoIdentity,
+        localPath: String,
+        workflows: [WorkflowMetadata],
+        localActivityAt: Date? = nil
+    ) {
+        self.identity = identity
+        self.localPath = localPath
+        self.workflows = workflows
+        self.localActivityAt = localActivityAt
+    }
 }
 
 struct RemoteRepository: Hashable, Sendable {
@@ -44,10 +72,33 @@ struct DiscoveredRepository: Identifiable, Hashable, Sendable {
     let localPath: String?
     let pushedAt: Date?
     let workflows: [WorkflowMetadata]
+    let localActivityAt: Date?
     var isExcluded: Bool
     var isAccessible: Bool
 
+    init(
+        identity: RepoIdentity,
+        source: RepositorySource,
+        localPath: String?,
+        pushedAt: Date?,
+        workflows: [WorkflowMetadata],
+        localActivityAt: Date? = nil,
+        isExcluded: Bool,
+        isAccessible: Bool
+    ) {
+        self.identity = identity
+        self.source = source
+        self.localPath = localPath
+        self.pushedAt = pushedAt
+        self.workflows = workflows
+        self.localActivityAt = localActivityAt
+        self.isExcluded = isExcluded
+        self.isAccessible = isAccessible
+    }
+
     var id: String { identity.normalizedKey }
+    var isLocalCheckout: Bool { localPath != nil }
+    var activityAt: Date? { localActivityAt ?? pushedAt }
 }
 
 enum LocalScanSkipReason: String, Codable, Sendable {
@@ -55,11 +106,24 @@ enum LocalScanSkipReason: String, Codable, Sendable {
     case noWorkflowFiles = "no_workflow_files"
     case nonGitHubOrigin = "non_github_origin"
     case unreadableGitMetadata = "unreadable_git_metadata"
+
+    var userMessage: String {
+        switch self {
+        case .githubWithoutWorkflowFiles, .noWorkflowFiles:
+            "No GitHub Actions workflow YAML"
+        case .nonGitHubOrigin:
+            "Origin is not hosted on GitHub"
+        case .unreadableGitMetadata:
+            "Git origin could not be read"
+        }
+    }
 }
 
-struct SkippedLocalRepository: Hashable, Sendable {
+struct SkippedLocalRepository: Identifiable, Hashable, Sendable {
     let relativePath: String
     let reason: LocalScanSkipReason
+
+    var id: String { relativePath + "|" + reason.rawValue }
 }
 
 struct LocalScanResult: Equatable, Sendable {

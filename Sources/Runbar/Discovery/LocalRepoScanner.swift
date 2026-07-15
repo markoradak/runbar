@@ -123,9 +123,41 @@ struct LocalRepoScanner: Sendable {
             LocalRepository(
                 identity: identity,
                 localPath: repositoryURL.path,
-                workflows: workflows
+                workflows: workflows,
+                localActivityAt: localActivityDate(
+                    repositoryURL: repositoryURL,
+                    workflowFiles: workflowFiles
+                )
             )
         )
+    }
+
+    private func localActivityDate(repositoryURL: URL, workflowFiles: [URL]) -> Date? {
+        let dotGit = repositoryURL.appendingPathComponent(".git")
+        let values = try? dotGit.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey])
+        let gitDirectory: URL?
+        if values?.isDirectory == true {
+            gitDirectory = dotGit
+        } else if values?.isRegularFile == true,
+                  let pointer = try? String(contentsOf: dotGit, encoding: .utf8),
+                  pointer.lowercased().hasPrefix("gitdir:") {
+            let rawPath = pointer.dropFirst("gitdir:".count)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            gitDirectory = URL(fileURLWithPath: rawPath, relativeTo: repositoryURL).standardizedFileURL
+        } else {
+            gitDirectory = nil
+        }
+
+        var candidates = workflowFiles + [repositoryURL]
+        if let gitDirectory {
+            candidates.append(gitDirectory.appendingPathComponent("HEAD"))
+            candidates.append(gitDirectory.appendingPathComponent("index"))
+        }
+        return candidates.compactMap { url in
+            try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+        }
+        .compactMap { date in date }
+        .max()
     }
 
     private func gitConfigURL(repositoryURL: URL) -> URL? {

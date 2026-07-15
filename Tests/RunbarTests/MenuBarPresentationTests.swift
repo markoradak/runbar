@@ -64,6 +64,27 @@ final class MenuBarPresentationTests: XCTestCase {
             ),
             .idle
         )
+        XCTAssertEqual(
+            MenuBarIconState.resolve(
+                isAuthenticated: true,
+                isDegraded: false,
+                runningCount: 0,
+                recent: [
+                    menuRun(conclusion: "success", updatedAt: now),
+                    menuRun(conclusion: "failure", updatedAt: now.addingTimeInterval(-60))
+                ]
+            ),
+            .idle
+        )
+    }
+
+    func testModernIconSymbolsAndStatusCopyAreUnambiguous() {
+        XCTAssertEqual(MenuBarIconState.idle.systemImage, "circle.fill")
+        XCTAssertEqual(MenuBarIconState.idle.statusText, "All workflows clear")
+        XCTAssertEqual(MenuBarIconState.recentFailure.systemImage, "exclamationmark.circle.fill")
+        XCTAssertEqual(MenuBarIconState.recentFailure.statusText, "Recent failure needs attention")
+        XCTAssertEqual(MenuBarIconState.running(count: 1).statusText, "1 workflow running")
+        XCTAssertEqual(MenuBarIconState.running(count: 2).statusText, "2 workflows running")
     }
 
     func testProgressUsesNoHistoryEstimateAndHonestOverrunStates() {

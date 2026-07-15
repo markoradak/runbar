@@ -32,6 +32,14 @@ actor GitHubClient {
         self.now = now
     }
 
+    func resetRepositoryAccess(_ repositoryKey: String) async throws {
+        do {
+            try await store.setRepositoryAccessible(true, repositoryKey: repositoryKey)
+        } catch {
+            throw GitHubClientError.persistence
+        }
+    }
+
     func get<Response: Decodable & Sendable>(
         _ responseType: Response.Type,
         endpoint: GitHubEndpoint,

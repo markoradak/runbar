@@ -257,6 +257,44 @@ final class GitHubClientTests: XCTestCase {
         }
     }
 
+    func testExplicitAccessResetAllowsOneConditionalRetry() async throws {
+        let store = MemoryGitHubStore()
+        let transport = ScriptedGitHubTransport(steps: [
+            .response(status: 404, headers: rateHeaders(remaining: 4_800), body: Data()),
+            .response(
+                status: 200,
+                headers: rateHeaders(etag: "v1", remaining: 4_799),
+                body: payload
+            )
+        ])
+        let client = GitHubClient(store: store, transport: transport, baseURL: baseURL)
+
+        do {
+            _ = try await client.get(
+                TestPayload.self,
+                endpoint: endpoint,
+                token: "secret",
+                repositoryKey: "owner/retry"
+            )
+            XCTFail("Expected initial access denial")
+        } catch let error as GitHubClientError {
+            XCTAssertEqual(error, .accessDenied(repositoryKey: "owner/retry", firstNotice: true))
+        }
+
+        try await client.resetRepositoryAccess("owner/retry")
+        let response = try await client.get(
+            TestPayload.self,
+            endpoint: endpoint,
+            token: "secret",
+            repositoryKey: "owner/retry"
+        )
+
+        XCTAssertEqual(response.value.value, 42)
+        XCTAssertEqual(response.statusCode, 200)
+        let requestCount = await transport.capturedRequests().count
+        XCTAssertEqual(requestCount, 2)
+    }
+
     func testAuthenticationDecodingTransportAndMissingETagCategoriesAreDistinct() async throws {
         let cases: [(ScriptedGitHubTransport.Step, GitHubClientError, GitHubErrorCategory, Int?)] = [
             (
@@ -365,6 +403,11 @@ private actor MemoryGitHubStore: GitHubClientStoring {
 
     func markRepositoryInaccessible(_ repositoryKey: String) async throws -> Bool {
         inaccessible.insert(repositoryKey).inserted
+    }
+
+    func setRepositoryAccessible(_ isAccessible: Bool, repositoryKey: String) async throws {
+        if isAccessible { inaccessible.remove(repositoryKey) }
+        else { inaccessible.insert(repositoryKey) }
     }
 
     func appendDebugEntry(_ entry: GitHubDebugEntry) async throws {

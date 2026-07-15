@@ -53,38 +53,77 @@ struct SettingsView: View {
 
     private var discoverySection: some View {
         Section("Repository discovery") {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(model.codeRootPath ?? "No code root selected")
+                        .font(.body.weight(.medium))
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Text("Local repositories are scanned four levels deep; remote discovery uses your 30 most recently pushed repositories.")
+                    Text("Local checkouts are shown first. Runbar scans four levels deep and also checks your 30 most recently pushed GitHub repositories.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Choose code root…", action: chooseCodeRoot)
-                Button("Refresh") { Task { await model.refreshRepositories() } }
-                    .disabled(model.isRefreshingRepositories)
+                Button("Choose…", action: chooseCodeRoot)
+                Button { Task { await model.refreshRepositories() } } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .disabled(model.isRefreshingRepositories)
             }
 
             discoveryStatus
 
-            if !model.discoveredRepositories.isEmpty {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(model.discoveredRepositories) { repository in
-                            repositoryRow(repository)
-                            Divider()
-                        }
-                    }
-                }
-                .frame(minHeight: 170, maxHeight: 260)
+            if let notice = model.repositoryAccessNotice {
+                Label(notice, systemImage: "info.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
-            Text("\(model.includedRepositoryCount) included; \(model.discoveredRepositories.count - model.includedRepositoryCount) excluded by deny-list")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if !model.discoveredRepositories.isEmpty {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(model.discoveredRepositories) { repository in
+                            repositoryRow(repository)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .frame(minHeight: 190, maxHeight: 320)
+            }
+
+            if !model.skippedLocalRepositories.isEmpty {
+                DisclosureGroup(
+                    String(model.skippedLocalRepositories.count) + " local repositories not monitored"
+                ) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(model.skippedLocalRepositories) { skipped in
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Image(systemName: "minus.circle")
+                                    .foregroundStyle(.tertiary)
+                                Text(skipped.relativePath)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer()
+                                Text(skipped.reason.userMessage)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .font(.caption)
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+            }
+
+            HStack(spacing: 12) {
+                Label(String(model.localRepositoryCount) + " local", systemImage: "laptopcomputer")
+                Label(String(model.includedRepositoryCount) + " included", systemImage: "checkmark.circle")
+                if model.inaccessibleRepositoryCount > 0 {
+                    Label(String(model.inaccessibleRepositoryCount) + " need access", systemImage: "lock.trianglebadge.exclamationmark")
+                        .foregroundStyle(.orange)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
     }
 
@@ -174,19 +213,26 @@ struct SettingsView: View {
     }
 
     private func repositoryRow(_ repository: DiscoveredRepository) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack {
-                Text(repository.identity.fullName).fontWeight(.medium)
-                Text(repository.source.rawValue)
-                    .font(.caption)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(.quaternary, in: Capsule())
-                if !repository.isAccessible {
-                    Label("Inaccessible", systemImage: "lock.trianglebadge.exclamationmark")
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .center, spacing: 9) {
+                Image(systemName: repository.source.systemImage)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(repository.isLocalCheckout ? Color.accentColor : Color.secondary)
+                    .frame(width: 22)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(repository.identity.fullName)
+                        .font(.body.weight(.semibold))
+                    Text(repository.source.userLabel)
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.secondary)
+                    if repository.isLocalCheckout, let activityAt = repository.localActivityAt {
+                        Text("Local activity " + WorkflowRunPresentation.relativeText(date: activityAt, now: Date()))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+
                 Spacer()
                 Toggle(
                     "Exclude",
@@ -199,18 +245,46 @@ struct SettingsView: View {
                 .controlSize(.small)
             }
 
-            if repository.workflows.isEmpty {
-                Text(repository.source == .remote ? "Workflow metadata loads from the API in M2." : "No parsed workflow metadata")
+            if !repository.isAccessible {
+                HStack(alignment: .top, spacing: 9) {
+                    Image(systemName: "lock.trianglebadge.exclamationmark.fill")
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("GitHub denied Actions access")
+                            .font(.caption.weight(.semibold))
+                        Text("Add this repository to the fine-grained token, or ask its resource owner to approve the token, then retry.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if model.isRetryingAccess(for: repository) {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text("Checking access…")
+                            }
+                            .font(.caption)
+                        } else {
+                            Button("Retry access") {
+                                Task { await model.retryRepositoryAccess(repository) }
+                            }
+                            .controlSize(.small)
+                        }
+                    }
+                }
+                .padding(9)
+                .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            } else if repository.workflows.isEmpty {
+                Text(repository.source == .remote ? "Workflow details load from GitHub as runs are monitored." : "No parsed workflow metadata")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(repository.workflows, id: \WorkflowMetadata.fileName) { workflow in
-                    Text("\(workflow.name) · on: \(workflow.events.isEmpty ? "unspecified" : workflow.events.joined(separator: ", "))")
+                    Text(workflow.name + " · on: " + (workflow.events.isEmpty ? "unspecified" : workflow.events.joined(separator: ", ")))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
         }
+        .padding(11)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
     }
 
     private func chooseCodeRoot() {

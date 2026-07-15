@@ -43,6 +43,7 @@ final class SettingsModel: ObservableObject {
     @Published private(set) var menuBarLoadError: String?
     @Published private(set) var workflowJobs: [Int64: WorkflowJobsState] = [:]
     @Published private(set) var isManualRefreshRunning = false
+    @Published private(set) var retryingRepositoryKeys: Set<String> = []
 
     @Published private(set) var notificationAuthorizationState: RunNotificationAuthorizationState = .notDetermined
     @Published private(set) var notificationsFailuresOnly: Bool
@@ -148,7 +149,19 @@ final class SettingsModel: ObservableObject {
     }
 
     var includedRepositoryCount: Int {
-        discoveredRepositories.filter { !$0.isExcluded }.count
+        discoveredRepositories.filter { repository in !repository.isExcluded }.count
+    }
+
+    var localRepositoryCount: Int {
+        discoveredRepositories.filter(\.isLocalCheckout).count
+    }
+
+    var inaccessibleRepositoryCount: Int {
+        discoveredRepositories.filter { repository in !repository.isAccessible }.count
+    }
+
+    func isRetryingAccess(for repository: DiscoveredRepository) -> Bool {
+        retryingRepositoryKeys.contains(repository.id)
     }
 
     var verificationRepositories: [DiscoveredRepository] {
@@ -286,6 +299,56 @@ final class SettingsModel: ObservableObject {
             await configureMonitoring()
         } catch {
             discoveryState = .failed(message: safeDiscoveryMessage(error))
+        }
+    }
+
+    func retryRepositoryAccess(_ repository: DiscoveredRepository) async {
+        guard !retryingRepositoryKeys.contains(repository.id) else { return }
+        guard let repoDiscovery, let githubClient else {
+            setDiscoveryInitializationFailure()
+            return
+        }
+
+        let token: String
+        do {
+            guard let storedToken = try credentialStore.readToken() else {
+                repositoryAccessNotice = "Save a GitHub credential before retrying repository access."
+                return
+            }
+            token = storedToken
+        } catch {
+            repositoryAccessNotice = safeCredentialMessage(error)
+            return
+        }
+
+        retryingRepositoryKeys.insert(repository.id)
+        defer { retryingRepositoryKeys.remove(repository.id) }
+        do {
+            try await githubClient.resetRepositoryAccess(repository.id)
+            try await repoDiscovery.setAccessible(true, repositoryKey: repository.id)
+            if let index = discoveredRepositories.firstIndex(where: { candidate in candidate.id == repository.id }) {
+                discoveredRepositories[index].isAccessible = true
+            }
+            _ = try await githubClient.get(
+                ActionsRunsProbe.self,
+                endpoint: .actionsRuns(repository: repository.identity),
+                token: token,
+                repositoryKey: repository.id
+            )
+            repositoryAccessNotice = repository.identity.fullName + " is accessible again and will be monitored."
+            await refreshDiscovery(token: token)
+        } catch let error as GitHubClientError {
+            if case .accessDenied = error {
+                if let index = discoveredRepositories.firstIndex(where: { candidate in candidate.id == repository.id }) {
+                    discoveredRepositories[index].isAccessible = false
+                }
+                repositoryAccessNotice = "GitHub still denies this repository. Add it to the fine-grained token, or obtain resource-owner approval, then retry."
+                await configureMonitoring()
+            } else {
+                repositoryAccessNotice = error.userMessage
+            }
+        } catch {
+            repositoryAccessNotice = "Runbar could not retry repository access."
         }
     }
 

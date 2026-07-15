@@ -13,21 +13,39 @@ struct RunbarMenuView: View {
             Divider()
             footer
         }
-        .frame(width: 440)
+        .frame(width: 420)
+        .background(.regularMaterial)
         .task { await model.loadIfNeeded() }
         .onAppear { model.menuBarDidAppear() }
         .onDisappear { model.menuBarDidDisappear() }
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Text("Runbar")
-                .font(.headline)
-            Spacer()
+        HStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.accentColor.gradient)
+                Image(systemName: "bolt.horizontal.fill")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 30, height: 30)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Runbar")
+                    .font(.headline)
+                Text(model.menuBarIconState.statusText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 8)
             connectionBadge
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 11)
+        .padding(.vertical, 12)
+        .background(.thinMaterial)
     }
 
     @ViewBuilder

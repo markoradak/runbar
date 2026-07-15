@@ -64,11 +64,21 @@ enum MenuBarIconState: Equatable, Sendable {
 
     var systemImage: String {
         switch self {
-        case .running: "circle.dotted"
+        case .running: "bolt.circle.fill"
         case .idle: "circle.fill"
-        case .recentFailure: "xmark.circle.fill"
-        case .degraded: "exclamationmark.triangle.fill"
-        case .authenticationRequired: "circle"
+        case .recentFailure: "exclamationmark.circle.fill"
+        case .degraded: "wifi.exclamationmark"
+        case .authenticationRequired: "person.crop.circle.badge.exclamationmark"
+        }
+    }
+
+    var statusText: String {
+        switch self {
+        case let .running(count): String(count) + " workflow" + (count == 1 ? "" : "s") + " running"
+        case .idle: "All workflows clear"
+        case .recentFailure: "Recent failure needs attention"
+        case .degraded: "Polling slowed to protect rate limit"
+        case .authenticationRequired: "GitHub setup required"
         }
     }
 
@@ -92,7 +102,8 @@ enum MenuBarIconState: Equatable, Sendable {
         if isDegraded { return .degraded }
         if runningCount > 0 { return .running(count: runningCount) }
 
-        if recent.contains(where: { WorkflowRunPresentation.isFailure($0.run.conclusion) }) {
+        if let newestCompletedRun = recent.first,
+           WorkflowRunPresentation.isFailure(newestCompletedRun.run.conclusion) {
             return .recentFailure
         }
         return .idle

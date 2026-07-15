@@ -17,6 +17,7 @@ enum RepositoryMerger {
                 localPath: item.localPath,
                 pushedAt: nil,
                 workflows: item.workflows,
+                localActivityAt: item.localActivityAt,
                 isExcluded: preference.isExcluded,
                 isAccessible: preference.isAccessible
             )
@@ -32,6 +33,7 @@ enum RepositoryMerger {
                     localPath: existing.localPath,
                     pushedAt: item.pushedAt,
                     workflows: existing.workflows,
+                    localActivityAt: existing.localActivityAt,
                     isExcluded: preference.isExcluded,
                     isAccessible: preference.isAccessible
                 )
@@ -42,14 +44,23 @@ enum RepositoryMerger {
                     localPath: nil,
                     pushedAt: item.pushedAt,
                     workflows: [],
+                    localActivityAt: nil,
                     isExcluded: preference.isExcluded,
                     isAccessible: preference.isAccessible
                 )
             }
         }
 
-        return repositories.values.sorted {
-            $0.identity.normalizedKey < $1.identity.normalizedKey
+        return repositories.values.sorted { lhs, rhs in
+            if lhs.isLocalCheckout != rhs.isLocalCheckout {
+                return lhs.isLocalCheckout
+            }
+            let leftDate = lhs.activityAt ?? .distantPast
+            let rightDate = rhs.activityAt ?? .distantPast
+            if leftDate != rightDate {
+                return leftDate > rightDate
+            }
+            return lhs.identity.normalizedKey < rhs.identity.normalizedKey
         }
     }
 }

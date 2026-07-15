@@ -4,13 +4,14 @@ struct MenuBarStatusLabel: View {
     let state: MenuBarIconState
 
     var body: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 4) {
             icon
             if case let .running(count) = state {
                 Text("\(count)")
                     .monospacedDigit()
             }
         }
+        .font(.system(size: 13, weight: .semibold))
         .accessibilityLabel(state.accessibilityLabel)
     }
 
@@ -19,19 +20,23 @@ struct MenuBarStatusLabel: View {
         switch state {
         case .running:
             Image(systemName: state.systemImage)
+                .symbolRenderingMode(.monochrome)
+                .contentTransition(.symbolEffect(.replace))
                 .symbolEffect(.pulse, options: .repeating)
         case .idle:
             Image(systemName: state.systemImage)
-                .opacity(0.45)
+                .imageScale(.small)
+                .opacity(0.42)
         case .recentFailure:
             Image(systemName: state.systemImage)
-                .foregroundStyle(.red)
+                .symbolRenderingMode(.monochrome)
         case .degraded:
             Image(systemName: state.systemImage)
-                .foregroundStyle(.orange)
+                .symbolRenderingMode(.monochrome)
         case .authenticationRequired:
             Image(systemName: state.systemImage)
-                .foregroundStyle(.secondary)
+                .symbolRenderingMode(.monochrome)
+                .opacity(0.65)
         }
     }
 }

@@ -161,6 +161,27 @@ actor SQLiteGitHubStore: GitHubClientStoring {
         return true
     }
 
+    func setRepositoryAccessible(_ isAccessible: Bool, repositoryKey: String) async throws {
+        let statement = try prepare(
+            """
+            INSERT INTO repo_preferences(repo_key, excluded, accessible) VALUES(?, 0, ?)
+            ON CONFLICT(repo_key) DO UPDATE SET accessible = excluded.accessible
+            """
+        )
+        defer { sqlite3_finalize(statement) }
+        bind(repositoryKey, to: statement, index: 1)
+        sqlite3_bind_int(statement, 2, isAccessible ? 1 : 0)
+        try stepDone(statement)
+
+        if try tableExists("repos") {
+            let repository = try prepare("UPDATE repos SET accessible = ? WHERE repo_key = ?")
+            defer { sqlite3_finalize(repository) }
+            sqlite3_bind_int(repository, 1, isAccessible ? 1 : 0)
+            bind(repositoryKey, to: repository, index: 2)
+            try stepDone(repository)
+        }
+    }
+
     func appendDebugEntry(_ entry: GitHubDebugEntry) async throws {
         let statement = try prepare(
             """
