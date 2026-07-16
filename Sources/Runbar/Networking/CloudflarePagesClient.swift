@@ -109,6 +109,22 @@ struct CloudflarePagesClient: ExternalProviderClient {
         throw ProviderClientError.invalidResponse
     }
 
+    /// Returns build-log lines for a deployment (newest last). The account is
+    /// recovered from `projectKey`, which is stored as "accountID/projectName".
+    func logLines(externalID: String, projectKey: String, token: String) async throws -> [String] {
+        guard let separator = projectKey.firstIndex(of: "/") else {
+            throw ProviderClientError.invalidResponse
+        }
+        let accountID = String(projectKey[..<separator])
+        let projectName = String(projectKey[projectKey.index(after: separator)...])
+        let result: CloudflareHTTPResult<CloudflareLogsEnvelope> = try await get(
+            path: "/accounts/\(accountID)/pages/projects/\(projectName)/deployments/\(externalID)/history/logs",
+            token: token
+        )
+        guard result.value.success else { throw ProviderClientError.invalidResponse }
+        return (result.value.result?.data ?? []).map(\.line)
+    }
+
     private func normalize(
         stage: CloudflareStage?,
         isSkipped: Bool?
@@ -150,6 +166,19 @@ struct CloudflarePagesClient: ExternalProviderClient {
             throw ProviderClientError.invalidResponse
         }
     }
+}
+
+private struct CloudflareLogsEnvelope: Decodable, Sendable {
+    let success: Bool
+    let result: CloudflareLogsResult?
+}
+
+private struct CloudflareLogsResult: Decodable, Sendable {
+    let data: [CloudflareLogLine]?
+}
+
+private struct CloudflareLogLine: Decodable, Sendable {
+    let line: String
 }
 
 private struct CloudflareHTTPResult<Value: Sendable>: Sendable {

@@ -101,7 +101,8 @@ struct ProviderExecution: Equatable, Sendable {
             triggeringActorLogin: nil,
             provider: provider,
             externalID: externalID,
-            previewURL: previewURL
+            previewURL: previewURL,
+            projectKey: projectKey
         )
     }
 }
@@ -181,6 +182,9 @@ protocol ExternalProviderClient: Sendable {
     /// Cancels a running execution. Providers without a cancel API throw
     /// `ProviderClientError.invalidResponse`.
     func cancel(externalID: String, token: String) async throws
+    /// Returns the raw log lines of an execution (newest last), capped by the
+    /// provider client to a reasonable amount for tail display.
+    func logLines(externalID: String, projectKey: String, token: String) async throws -> [String]
 }
 
 protocol ProviderExecutionStoring: Sendable {

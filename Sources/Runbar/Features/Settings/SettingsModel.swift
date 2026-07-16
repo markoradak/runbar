@@ -62,6 +62,7 @@ final class SettingsModel: ObservableObject {
     @Published private(set) var acknowledgedFailureRunID: Int64?
     @Published private(set) var runActionsInFlight: Set<Int64> = []
     @Published private(set) var runActionError: String?
+    @Published private(set) var failureLogs: [Int64: RunFailureLogState] = [:]
 
     private static let logger = Logger(subsystem: "app.runbar.Runbar", category: "authentication")
     private static let discoveryLogger = Logger(subsystem: "app.runbar.Runbar", category: "discovery")
@@ -734,6 +735,71 @@ final class SettingsModel: ObservableObject {
             await pollScheduler.reconcile(trigger: .manual)
         }
         await refreshMenuBarRuns()
+    }
+
+    // MARK: - Failure logs
+
+    func failureLogState(for runID: Int64) -> RunFailureLogState {
+        failureLogs[runID] ?? .idle
+    }
+
+    func expandFailureLog(for item: MenuBarRun) {
+        switch failureLogState(for: item.id) {
+        case .idle, .failed:
+            Task { await loadFailureLog(for: item) }
+        case .loading, .loaded:
+            break
+        }
+    }
+
+    func loadFailureLog(for item: MenuBarRun) async {
+        failureLogs[item.id] = .loading
+        do {
+            switch item.run.provider {
+            case .githubActions:
+                failureLogs[item.id] = .loaded(try await loadGitHubFailureLog(for: item))
+            case .vercel, .cloudflarePages:
+                guard let providerMonitor else { throw ProviderClientError.transport }
+                let lines = try await providerMonitor.executionLogLines(
+                    provider: item.run.provider,
+                    externalID: item.run.externalID,
+                    projectKey: item.run.projectKey ?? item.run.repositoryKey
+                )
+                failureLogs[item.id] = .loaded(
+                    RunFailureLog(
+                        jobName: nil,
+                        stepName: nil,
+                        lines: FailureLogText.tail(lines),
+                        webURL: item.run.htmlURL
+                    )
+                )
+            }
+        } catch {
+            failureLogs[item.id] = .failed("Runbar could not fetch the failure log.")
+        }
+    }
+
+    private func loadGitHubFailureLog(for item: MenuBarRun) async throws -> RunFailureLog {
+        guard let githubClient, let workflowJobsLoader else { throw GitHubClientError.transport }
+        guard let token = try await credentialProvider.readCredential(), !token.isEmpty else {
+            throw GitHubClientError.authentication
+        }
+        let jobs = try await workflowJobsLoader.loadJobs(for: item, token: token).jobs
+        guard let failedJob = jobs.first(where: { WorkflowRunPresentation.isFailure($0.conclusion) }) else {
+            throw GitHubClientError.decoding
+        }
+        let failedStep = failedJob.steps.first(where: { WorkflowRunPresentation.isFailure($0.conclusion) })
+        let logText = try await githubClient.fetchJobLogText(
+            repository: item.repository,
+            jobID: failedJob.id,
+            token: token
+        )
+        return RunFailureLog(
+            jobName: failedJob.name,
+            stepName: failedStep?.name,
+            lines: FailureLogText.failureTail(logText),
+            webURL: failedJob.htmlURL ?? item.run.htmlURL
+        )
     }
 
     func manualRefresh() async {

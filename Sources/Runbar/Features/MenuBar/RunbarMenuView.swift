@@ -85,6 +85,201 @@ private extension Font {
     }
 }
 
+/// Small bordered icon button with a hover highlight, used for row actions.
+private struct RowActionButton: View {
+    let icon: String
+    let help: String
+    var busy: Bool = false
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color.primary.opacity(hovered ? 0.12 : 0.05))
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .strokeBorder(MenuTheme.border, lineWidth: 1)
+                if busy {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.45)
+                } else {
+                    Image(systemName: icon)
+                        .font(.system(size: 8.5, weight: .semibold))
+                        .foregroundStyle(hovered ? MenuTheme.textPrimary : MenuTheme.textSecondary)
+                }
+            }
+            .frame(width: 20, height: 20)
+        }
+        .buttonStyle(.plain)
+        .disabled(busy)
+        .onHover { hovered = $0 }
+        .help(help)
+        .accessibilityLabel(help)
+    }
+}
+
+/// Workflow-name link that highlights on hover.
+private struct RunTitleLink: View {
+    let title: String
+    let url: URL?
+    @State private var hovered = false
+
+    var body: some View {
+        if let url {
+            Link(destination: url) {
+                HStack(spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(hovered ? MenuTheme.blue : MenuTheme.textPrimary)
+                        .lineLimit(1)
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 7.5, weight: .bold))
+                        .foregroundStyle(hovered ? MenuTheme.blue : MenuTheme.textSecondary.opacity(0.8))
+                }
+            }
+            .onHover { hovered = $0 }
+        } else {
+            Text(title)
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(MenuTheme.textPrimary)
+                .lineLimit(1)
+        }
+    }
+}
+
+/// Chevron that expands/collapses a failed row's log, with hover highlight.
+private struct FailureLogToggle: View {
+    let expanded: Bool
+    let action: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(hovered ? MenuTheme.textPrimary : MenuTheme.textSecondary)
+                .rotationEffect(.degrees(expanded ? 180 : 0))
+                .frame(width: 20, height: 20)
+                .background(Circle().fill(Color.primary.opacity(hovered ? 0.08 : 0)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .help(expanded ? "Hide failure log" : "Show failure log")
+        .accessibilityLabel(expanded ? "Hide failure log" : "Show failure log")
+    }
+}
+
+/// Floating copy-to-clipboard button for the terminal block. Styled for the
+/// always-dark terminal background; flashes a green check after copying.
+private struct CopyLogButton: View {
+    let lines: [String]
+    @State private var hovered = false
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
+            copied = true
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(1.2))
+                copied = false
+            }
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(
+                    copied
+                        ? Color(red: 0.35, green: 0.85, blue: 0.48)
+                        : (hovered ? Color.white : Color(white: 0.72))
+                )
+                .frame(width: 22, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color.white.opacity(hovered ? 0.16 : 0.08))
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .help("Copy log")
+        .accessibilityLabel("Copy log")
+    }
+}
+
+/// AppKit-backed log view: wheel scrolling rubber-bands at the edges instead
+/// of bubbling to the panel's scroll view, and text is selectable.
+private struct TerminalLogView: NSViewRepresentable {
+    let lines: [String]
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let textView = NSTextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.drawsBackground = false
+        textView.textContainerInset = NSSize(width: 10, height: 10)
+        textView.autoresizingMask = [.width]
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.textContainer?.widthTracksTextView = true
+
+        let scroll = NSScrollView()
+        scroll.documentView = textView
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        scroll.verticalScrollElasticity = .allowed
+        scroll.horizontalScrollElasticity = .none
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        guard context.coordinator.lines != lines,
+              let textView = scroll.documentView as? NSTextView
+        else { return }
+        context.coordinator.lines = lines
+        textView.textStorage?.setAttributedString(Self.attributedText(lines))
+        if let container = textView.textContainer {
+            textView.layoutManager?.ensureLayout(for: container)
+        }
+        textView.scrollToEndOfDocument(nil)
+    }
+
+    final class Coordinator {
+        var lines: [String] = []
+    }
+
+    private static func attributedText(_ lines: [String]) -> NSAttributedString {
+        let font = NSFont.monospacedSystemFont(ofSize: 10.5, weight: .regular)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 3
+        let result = NSMutableAttributedString()
+        for (index, line) in lines.enumerated() {
+            let color: NSColor = if line.hasPrefix("Error:") {
+                NSColor(red: 1.0, green: 0.48, blue: 0.44, alpha: 1)
+            } else if line.hasPrefix("Warning:") {
+                NSColor(red: 0.95, green: 0.76, blue: 0.36, alpha: 1)
+            } else {
+                NSColor(white: 0.92, alpha: 1)
+            }
+            result.append(
+                NSAttributedString(
+                    string: (index > 0 ? "\n" : "") + (line.isEmpty ? " " : line),
+                    attributes: [.font: font, .foregroundColor: color, .paragraphStyle: paragraph]
+                )
+            )
+        }
+        return result
+    }
+}
+
 /// Native popover frosted glass — the same material system menus use.
 private struct PopoverGlassBackground: NSViewRepresentable {
     func makeNSView(context: Context) -> NSVisualEffectView {
@@ -102,6 +297,7 @@ struct RunbarMenuView: View {
     @Environment(\.openSettings) private var openSettings
     @ObservedObject var model: SettingsModel
     @State private var expandedRunIDs: Set<Int64> = []
+    @State private var expandedFailureLogIDs: Set<Int64> = []
     @State private var hoveredRunID: Int64?
     private let settingsAction: (() -> Void)?
 
@@ -474,28 +670,7 @@ struct RunbarMenuView: View {
         busy: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(Color.primary.opacity(0.05))
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .strokeBorder(MenuTheme.border, lineWidth: 1)
-                if busy {
-                    ProgressView()
-                        .controlSize(.small)
-                        .scaleEffect(0.45)
-                } else {
-                    Image(systemName: icon)
-                        .font(.system(size: 8.5, weight: .semibold))
-                        .foregroundStyle(MenuTheme.textSecondary)
-                }
-            }
-            .frame(width: 20, height: 20)
-        }
-        .buttonStyle(.plain)
-        .disabled(busy)
-        .help(help)
-        .accessibilityLabel(help)
+        RowActionButton(icon: icon, help: help, busy: busy, action: action)
     }
 
     private func metaChip(_ text: String, icon: String) -> some View {
@@ -597,7 +772,39 @@ struct RunbarMenuView: View {
 
     private func recentRow(_ item: MenuBarRun) -> some View {
         let failed = WorkflowRunPresentation.isFailure(item.run.conclusion)
-        return HStack(alignment: .center, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 8) {
+            recentRowHeader(item, failed: failed)
+            if failed, expandedFailureLogIDs.contains(item.id) {
+                failureLogContent(item)
+                    .padding(.bottom, 2)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .onHover { hovering in
+            if hovering {
+                hoveredRunID = item.id
+            } else if hoveredRunID == item.id {
+                hoveredRunID = nil
+            }
+        }
+        .background(
+            failed ? MenuTheme.red.opacity(0.07) : MenuTheme.surface,
+            in: RoundedRectangle(cornerRadius: 9)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9)
+                .strokeBorder(
+                    failed
+                        ? MenuTheme.red.opacity(0.25)
+                        : (item.matchesLocalHEAD ? MenuTheme.blue.opacity(0.35) : MenuTheme.border),
+                    lineWidth: 1
+                )
+        )
+    }
+
+    private func recentRowHeader(_ item: MenuBarRun, failed: Bool) -> some View {
+        HStack(alignment: .center, spacing: 10) {
             ProviderIconTile(provider: item.run.provider, size: 26)
                 .overlay(alignment: .bottomTrailing) {
                     Circle()
@@ -628,33 +835,72 @@ struct RunbarMenuView: View {
                             completedAt: item.run.completedAt
                         )
                     )
+                    if failed {
+                        Spacer(minLength: 6)
+                        failureLogToggle(item)
+                    }
                 }
                 .font(.mono(10))
                 .foregroundStyle(MenuTheme.textSecondary)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .onHover { hovering in
-            if hovering {
-                hoveredRunID = item.id
-            } else if hoveredRunID == item.id {
-                hoveredRunID = nil
+    }
+
+    // MARK: - Failure log
+
+    private func failureLogToggle(_ item: MenuBarRun) -> some View {
+        FailureLogToggle(expanded: expandedFailureLogIDs.contains(item.id)) {
+            withAnimation(.easeOut(duration: 0.15)) {
+                if expandedFailureLogIDs.contains(item.id) {
+                    expandedFailureLogIDs.remove(item.id)
+                } else {
+                    expandedFailureLogIDs.insert(item.id)
+                    model.expandFailureLog(for: item)
+                }
             }
         }
-        .background(
-            failed ? MenuTheme.red.opacity(0.07) : MenuTheme.surface,
-            in: RoundedRectangle(cornerRadius: 9)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 9)
-                .strokeBorder(
-                    failed
-                        ? MenuTheme.red.opacity(0.25)
-                        : (item.matchesLocalHEAD ? MenuTheme.blue.opacity(0.35) : MenuTheme.border),
-                    lineWidth: 1
-                )
-        )
+    }
+
+    @ViewBuilder
+    private func failureLogContent(_ item: MenuBarRun) -> some View {
+        switch model.failureLogState(for: item.id) {
+        case .idle, .loading:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("fetching logs…")
+                    .font(.mono(10))
+                    .foregroundStyle(MenuTheme.textSecondary)
+            }
+        case let .failed(message):
+            HStack {
+                Text(message)
+                    .font(.mono(10))
+                    .foregroundStyle(MenuTheme.red)
+                Spacer()
+                Button("retry") { model.expandFailureLog(for: item) }
+                    .buttonStyle(.link)
+                    .font(.mono(10, .semibold))
+            }
+        case let .loaded(log):
+            terminalBlock(log.lines)
+        }
+    }
+
+    /// Terminal-styled log tail — always dark, regardless of app theme.
+    /// AppKit-backed so wheel scrolling stays contained instead of bubbling
+    /// to the panel's scroll view.
+    private func terminalBlock(_ lines: [String]) -> some View {
+        TerminalLogView(lines: lines)
+            .frame(height: min(200, CGFloat(lines.count) * 17 + 22))
+            .background(
+                Color(red: 0.055, green: 0.065, blue: 0.09),
+                in: RoundedRectangle(cornerRadius: 7)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .overlay(alignment: .bottomTrailing) {
+                CopyLogButton(lines: lines)
+                    .padding(6)
+            }
     }
 
     private var headBadge: some View {
@@ -835,26 +1081,8 @@ struct RunbarMenuView: View {
 
     // MARK: - Shared
 
-    @ViewBuilder
     private func runLink(_ item: MenuBarRun) -> some View {
-        if let url = URL(string: item.run.htmlURL) {
-            Link(destination: url) {
-                HStack(spacing: 3) {
-                    Text(item.run.workflowName)
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(MenuTheme.textPrimary)
-                        .lineLimit(1)
-                    Image(systemName: "arrow.up.right")
-                        .font(.system(size: 7.5, weight: .bold))
-                        .foregroundStyle(MenuTheme.textSecondary.opacity(0.8))
-                }
-            }
-        } else {
-            Text(item.run.workflowName)
-                .font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(MenuTheme.textPrimary)
-                .lineLimit(1)
-        }
+        RunTitleLink(title: item.run.workflowName, url: URL(string: item.run.htmlURL))
     }
 
     @MainActor

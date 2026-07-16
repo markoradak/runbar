@@ -120,6 +120,39 @@ struct VercelClient: ExternalProviderClient {
         throw lastError
     }
 
+    /// Returns build-log lines for a deployment (newest last). Uses the same
+    /// scope retry as `cancel` because events also require the owning teamId.
+    func logLines(externalID: String, projectKey _: String, token: String) async throws -> [String] {
+        let teamsResponse: HTTPResult<VercelTeamsEnvelope> = try await get(
+            path: "/v2/teams",
+            query: [URLQueryItem(name: "limit", value: "100")],
+            token: token
+        )
+        let teamIDs: [String?] = [nil] + teamsResponse.value.teams.map { $0.id }
+        var lastError: ProviderClientError = .invalidResponse
+        for teamID in teamIDs {
+            var query = [
+                URLQueryItem(name: "direction", value: "backward"),
+                URLQueryItem(name: "limit", value: "100")
+            ]
+            if let teamID { query.append(URLQueryItem(name: "teamId", value: teamID)) }
+            do {
+                let result: HTTPResult<[VercelDeploymentEvent]> = try await get(
+                    path: "/v3/deployments/\(externalID)/events",
+                    query: query,
+                    token: token
+                )
+                // Backward direction returns newest first; restore log order.
+                return result.value
+                    .compactMap { $0.payload?.text ?? $0.text }
+                    .reversed()
+            } catch let error as ProviderClientError {
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+
     private func send(
         method: String,
         path: String,
@@ -226,6 +259,16 @@ private struct VercelDeployment: Decodable, Sendable {
         case inspectorURL = "inspectorUrl"
         case projectID = "projectId"
     }
+}
+
+private struct VercelDeploymentEvent: Decodable, Sendable {
+    let type: String?
+    let text: String?
+    let payload: VercelDeploymentEventPayload?
+}
+
+private struct VercelDeploymentEventPayload: Decodable, Sendable {
+    let text: String?
 }
 
 private struct VercelDeploymentMeta: Decodable, Sendable {

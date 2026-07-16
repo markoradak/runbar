@@ -51,6 +51,9 @@ struct WorkflowRun: Equatable, Sendable {
     let provider: ExecutionProvider
     let externalID: String
     let previewURL: String?
+    /// Provider-scoped project identifier (e.g. Cloudflare "accountID/name");
+    /// nil for GitHub runs.
+    let projectKey: String?
 
     init(
         id: Int64,
@@ -72,7 +75,8 @@ struct WorkflowRun: Equatable, Sendable {
         triggeringActorLogin: String?,
         provider: ExecutionProvider = .githubActions,
         externalID: String? = nil,
-        previewURL: String? = nil
+        previewURL: String? = nil,
+        projectKey: String? = nil
     ) {
         self.id = id
         self.repositoryKey = repositoryKey
@@ -94,6 +98,7 @@ struct WorkflowRun: Equatable, Sendable {
         self.provider = provider
         self.externalID = externalID ?? String(id)
         self.previewURL = previewURL
+        self.projectKey = projectKey
     }
 
     var isActive: Bool {

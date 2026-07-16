@@ -140,6 +140,18 @@ actor ExternalProviderMonitor: LocalPushPolling {
         await refreshAll()
     }
 
+    /// Returns an execution's log lines (newest last) for failure display.
+    func executionLogLines(
+        provider: ExecutionProvider,
+        externalID: String,
+        projectKey: String
+    ) async throws -> [String] {
+        guard let token = tokens[provider], let client = clients[provider] else {
+            throw ProviderClientError.authentication
+        }
+        return try await client.logLines(externalID: externalID, projectKey: projectKey, token: token)
+    }
+
     func handleLocalPush(repositoryKey _: String) async -> Date? {
         guard !tokens.isEmpty else { return nil }
         let startedAt = now()

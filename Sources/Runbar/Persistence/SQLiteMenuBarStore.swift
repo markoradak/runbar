@@ -318,14 +318,14 @@ actor SQLiteMenuBarStore: MenuBarDataStoring {
                         triggeringActorLogin: nil,
                         provider: provider,
                         externalID: externalID,
-                        previewURL: text(statement, column: 20)
+                        previewURL: text(statement, column: 20),
+                        projectKey: projectKey
                     ),
                     repository: RepoIdentity(owner: owner, name: name),
                     matchesLocalHEAD: sqlite3_column_int(statement, 19) != 0,
                     medianDurationSeconds: median
                 )
             )
-            _ = projectKey
         }
         return rows
     }

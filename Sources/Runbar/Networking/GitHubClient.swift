@@ -68,6 +68,59 @@ actor GitHubClient {
         }
     }
 
+    /// Downloads a job's plain-text log. GitHub answers with a 302 to blob
+    /// storage whose SAS URL must be fetched WITHOUT the Authorization
+    /// header, so the redirect is followed manually.
+    func fetchJobLogText(repository: RepoIdentity, jobID: Int64, token: String) async throws -> String {
+        guard !token.isEmpty else { throw GitHubClientError.authentication }
+        let path = "repos/\(repository.owner)/\(repository.name)/actions/jobs/\(jobID)/logs"
+        var request = URLRequest(
+            url: baseURL.appendingPathComponent(path),
+            cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
+            timeoutInterval: 30
+        )
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(Self.acceptHeader, forHTTPHeaderField: "Accept")
+        request.setValue(Self.apiVersion, forHTTPHeaderField: "X-GitHub-Api-Version")
+
+        let (data, response): (Data, HTTPURLResponse)
+        do {
+            (data, response) = try await transport.sendWithoutRedirects(request)
+        } catch {
+            throw (error as? GitHubClientError) ?? .transport
+        }
+
+        switch response.statusCode {
+        case 200:
+            return String(decoding: data, as: UTF8.self)
+        case 301, 302, 307:
+            guard let location = response.value(forHTTPHeaderField: "Location"),
+                  let redirectURL = URL(string: location)
+            else { throw GitHubClientError.transport }
+            var redirected = URLRequest(
+                url: redirectURL,
+                cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
+                timeoutInterval: 30
+            )
+            redirected.httpMethod = "GET"
+            let (logData, logResponse): (Data, HTTPURLResponse)
+            do {
+                (logData, logResponse) = try await transport.send(redirected)
+            } catch {
+                throw (error as? GitHubClientError) ?? .transport
+            }
+            guard logResponse.statusCode == 200 else {
+                throw GitHubClientError.unexpectedStatus(logResponse.statusCode)
+            }
+            return String(decoding: logData, as: UTF8.self)
+        case 401:
+            throw GitHubClientError.authentication
+        default:
+            throw GitHubClientError.unexpectedStatus(response.statusCode)
+        }
+    }
+
     func resetRepositoryAccess(_ repositoryKey: String) async throws {
         do {
             try await store.setRepositoryAccessible(true, repositoryKey: repositoryKey)

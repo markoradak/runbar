@@ -154,6 +154,10 @@ private actor StubExternalProviderClient: ExternalProviderClient {
     }
 
     func cancel(externalID _: String, token _: String) async throws {}
+
+    func logLines(externalID _: String, projectKey _: String, token _: String) async throws -> [String] {
+        []
+    }
 }
 
 private actor MemoryProviderExecutionStore: ProviderExecutionStoring {
