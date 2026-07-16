@@ -18,7 +18,7 @@ struct VercelClient: ExternalProviderClient {
 
     func fetch(token: String) async throws -> ProviderFetchResult {
         let user: VercelUserEnvelope = try await get(path: "/v2/user", token: token).value
-        let teamsResponse: HTTPResult<VercelTeamsEnvelope> = try await get(
+        let teamsResponse: ProviderHTTPResult<VercelTeamsEnvelope> = try await get(
             path: "/v2/teams",
             query: [URLQueryItem(name: "limit", value: "100")],
             token: token
@@ -34,7 +34,7 @@ struct VercelClient: ExternalProviderClient {
         for scope in scopes {
             var query = [URLQueryItem(name: "limit", value: "20")]
             if let id = scope.id { query.append(URLQueryItem(name: "teamId", value: id)) }
-            let result: HTTPResult<VercelDeploymentsEnvelope> = try await get(
+            let result: ProviderHTTPResult<VercelDeploymentsEnvelope> = try await get(
                 path: "/v6/deployments",
                 query: query,
                 token: token
@@ -89,10 +89,11 @@ struct VercelClient: ExternalProviderClient {
         )
     }
 
-    /// Returns build-log lines for a deployment (newest last). Uses the same
-    /// scope retry as `cancel` because events also require the owning teamId.
+    /// Returns build-log lines for a deployment (newest last). The events
+    /// endpoint requires the owning scope's teamId, which is not stored, so try
+    /// the personal scope first and then each team until one accepts.
     func logLines(externalID: String, projectKey _: String, token: String) async throws -> [String] {
-        let teamsResponse: HTTPResult<VercelTeamsEnvelope> = try await get(
+        let teamsResponse: ProviderHTTPResult<VercelTeamsEnvelope> = try await get(
             path: "/v2/teams",
             query: [URLQueryItem(name: "limit", value: "100")],
             token: token
@@ -106,7 +107,7 @@ struct VercelClient: ExternalProviderClient {
             ]
             if let teamID { query.append(URLQueryItem(name: "teamId", value: teamID)) }
             do {
-                let result: HTTPResult<[VercelDeploymentEvent]> = try await get(
+                let result: ProviderHTTPResult<[VercelDeploymentEvent]> = try await get(
                     path: "/v3/deployments/\(externalID)/events",
                     query: query,
                     token: token
@@ -136,30 +137,15 @@ struct VercelClient: ExternalProviderClient {
         path: String,
         query: [URLQueryItem] = [],
         token: String
-    ) async throws -> HTTPResult<T> {
-        guard var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)
-        else { throw ProviderClientError.invalidResponse }
-        components.queryItems = query.isEmpty ? nil : query
-        guard let url = components.url else { throw ProviderClientError.invalidResponse }
-        let (data, response): (Data, HTTPURLResponse)
-        do { (data, response) = try await transport.send(ProviderHTTP.request(url: url, token: token)) }
-        catch let error as ProviderClientError { throw error }
-        catch { throw ProviderClientError.transport }
-        try ProviderHTTP.validate(response)
-        do {
-            return HTTPResult(
-                value: try JSONDecoder().decode(T.self, from: data),
-                rateLimit: ProviderHTTP.rateLimit(from: response)
-            )
-        } catch {
-            throw ProviderClientError.invalidResponse
-        }
+    ) async throws -> ProviderHTTPResult<T> {
+        try await ProviderHTTP.get(
+            baseURL: baseURL,
+            path: path,
+            query: query,
+            token: token,
+            transport: transport
+        )
     }
-}
-
-private struct HTTPResult<Value: Sendable>: Sendable {
-    let value: Value
-    let rateLimit: ProviderRateLimit
 }
 
 private struct VercelScope: Sendable {

@@ -25,7 +25,7 @@ struct CloudflarePagesClient: ExternalProviderClient {
             throw ProviderClientError.authentication
         }
 
-        let accountsResult: CloudflareHTTPResult<CloudflareEnvelope<[CloudflareAccount]>> = try await get(
+        let accountsResult: ProviderHTTPResult<CloudflareEnvelope<[CloudflareAccount]>> = try await get(
             path: "/accounts",
             query: [URLQueryItem(name: "per_page", value: "50")],
             token: token
@@ -36,7 +36,7 @@ struct CloudflarePagesClient: ExternalProviderClient {
         var lastRateLimit = accountsResult.rateLimit
         var projectCount = 0
         for account in accountsResult.value.result {
-            let projectsResult: CloudflareHTTPResult<CloudflareEnvelope<[CloudflareProject]>> = try await get(
+            let projectsResult: ProviderHTTPResult<CloudflareEnvelope<[CloudflareProject]>> = try await get(
                 path: "/accounts/\(account.id)/pages/projects",
                 query: [URLQueryItem(name: "per_page", value: "100")],
                 token: token
@@ -112,7 +112,7 @@ struct CloudflarePagesClient: ExternalProviderClient {
         }
         let accountID = String(projectKey[..<separator])
         let projectName = String(projectKey[projectKey.index(after: separator)...])
-        let result: CloudflareHTTPResult<CloudflareLogsEnvelope> = try await get(
+        let result: ProviderHTTPResult<CloudflareLogsEnvelope> = try await get(
             path: "/accounts/\(accountID)/pages/projects/\(projectName)/deployments/\(externalID)/history/logs",
             token: token
         )
@@ -142,24 +142,14 @@ struct CloudflarePagesClient: ExternalProviderClient {
         path: String,
         query: [URLQueryItem] = [],
         token: String
-    ) async throws -> CloudflareHTTPResult<T> {
-        guard var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)
-        else { throw ProviderClientError.invalidResponse }
-        components.queryItems = query.isEmpty ? nil : query
-        guard let url = components.url else { throw ProviderClientError.invalidResponse }
-        let (data, response): (Data, HTTPURLResponse)
-        do { (data, response) = try await transport.send(ProviderHTTP.request(url: url, token: token)) }
-        catch let error as ProviderClientError { throw error }
-        catch { throw ProviderClientError.transport }
-        try ProviderHTTP.validate(response)
-        do {
-            return CloudflareHTTPResult(
-                value: try JSONDecoder().decode(T.self, from: data),
-                rateLimit: ProviderHTTP.rateLimit(from: response)
-            )
-        } catch {
-            throw ProviderClientError.invalidResponse
-        }
+    ) async throws -> ProviderHTTPResult<T> {
+        try await ProviderHTTP.get(
+            baseURL: baseURL,
+            path: path,
+            query: query,
+            token: token,
+            transport: transport
+        )
     }
 }
 
@@ -174,11 +164,6 @@ private struct CloudflareLogsResult: Decodable, Sendable {
 
 private struct CloudflareLogLine: Decodable, Sendable {
     let line: String
-}
-
-private struct CloudflareHTTPResult<Value: Sendable>: Sendable {
-    let value: Value
-    let rateLimit: ProviderRateLimit
 }
 
 private struct CloudflareEnvelope<Result: Decodable & Sendable>: Decodable, Sendable {

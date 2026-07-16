@@ -25,7 +25,42 @@ struct URLSessionProviderTransport: ProviderTransport {
     }
 }
 
+/// A decoded provider response plus the rate-limit headers that came with it.
+struct ProviderHTTPResult<Value: Sendable>: Sendable {
+    let value: Value
+    let rateLimit: ProviderRateLimit
+}
+
 enum ProviderHTTP {
+    /// The single GET path for every provider client: build the URL, send it
+    /// through the shared transport, validate the status, decode, and carry the
+    /// rate-limit headers back out.
+    static func get<T: Decodable & Sendable>(
+        baseURL: URL,
+        path: String,
+        query: [URLQueryItem] = [],
+        token: String,
+        transport: any ProviderTransport
+    ) async throws -> ProviderHTTPResult<T> {
+        guard var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)
+        else { throw ProviderClientError.invalidResponse }
+        components.queryItems = query.isEmpty ? nil : query
+        guard let url = components.url else { throw ProviderClientError.invalidResponse }
+        let (data, response): (Data, HTTPURLResponse)
+        do { (data, response) = try await transport.send(request(url: url, token: token)) }
+        catch let error as ProviderClientError { throw error }
+        catch { throw ProviderClientError.transport }
+        try validate(response)
+        do {
+            return ProviderHTTPResult(
+                value: try JSONDecoder().decode(T.self, from: data),
+                rateLimit: rateLimit(from: response)
+            )
+        } catch {
+            throw ProviderClientError.invalidResponse
+        }
+    }
+
     static func request(url: URL, token: String) -> URLRequest {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
