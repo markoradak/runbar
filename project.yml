@@ -40,6 +40,7 @@ targets:
     info:
       path: Sources/Runbar/Info.plist
       properties:
+        CFBundleIconName: AppIcon
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.developer-tools
@@ -49,6 +50,7 @@ targets:
         SUPublicEDKey: FJ+L6Mt5uoedQYpem04aA6kLG09B0KIei2OPu43zW4I=
     settings:
       base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_APP_SANDBOX: NO
         GENERATE_INFOPLIST_FILE: NO
         PRODUCT_BUNDLE_IDENTIFIER: app.runbar.Runbar

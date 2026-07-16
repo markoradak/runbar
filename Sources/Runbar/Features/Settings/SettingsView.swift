@@ -170,24 +170,7 @@ struct SettingsView: View {
     }
 
     private var sidebarLogo: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.accentColor.opacity(0.13))
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .strokeBorder(Color.accentColor.opacity(0.28), lineWidth: 1)
-            HStack(spacing: 2.2) {
-                ForEach(0 ..< 2, id: \.self) { _ in
-                    VStack(spacing: 2.2) {
-                        ForEach(0 ..< 3, id: \.self) { _ in
-                            Circle()
-                                .fill(Color.accentColor)
-                                .frame(width: 2.6, height: 2.6)
-                        }
-                    }
-                }
-            }
-        }
-        .frame(width: 26, height: 26)
+        RunbarIconTile(tint: .accentColor, size: 26)
     }
 
     private func sidebarItem(_ tab: SettingsTab) -> some View {

@@ -244,12 +244,22 @@ private struct TerminalLogView: NSViewRepresentable {
         guard context.coordinator.lines != lines,
               let textView = scroll.documentView as? NSTextView
         else { return }
+        // Follow the tail only while the user is already at the bottom; if
+        // they scrolled up to read, leave their position alone.
+        let wasAtBottom: Bool
+        if let documentView = scroll.documentView {
+            wasAtBottom = documentView.bounds.height - scroll.contentView.bounds.maxY < 24
+        } else {
+            wasAtBottom = true
+        }
         context.coordinator.lines = lines
         textView.textStorage?.setAttributedString(Self.attributedText(lines))
         if let container = textView.textContainer {
             textView.layoutManager?.ensureLayout(for: container)
         }
-        textView.scrollToEndOfDocument(nil)
+        if wasAtBottom {
+            textView.scrollToEndOfDocument(nil)
+        }
     }
 
     final class Coordinator {
@@ -328,11 +338,11 @@ struct RunbarMenuView: View {
 
     private var header: some View {
         HStack(spacing: 11) {
-            logoTile
-            VStack(alignment: .leading, spacing: 2) {
-                Text("runbar")
-                    .font(.mono(14, .bold))
-                    .foregroundStyle(MenuTheme.textPrimary)
+            RunbarIconTile(tint: statusAccent, size: 36)
+            VStack(alignment: .leading, spacing: 4) {
+                RunbarWordmarkShape()
+                    .fill(MenuTheme.textPrimary)
+                    .frame(width: 13 * RunbarWordmarkShape.aspectRatio, height: 13)
                 HStack(spacing: 5) {
                     Text("❯")
                         .font(.mono(10, .bold))
@@ -349,27 +359,6 @@ struct RunbarMenuView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .background(MenuTheme.surface)
-    }
-
-    private var logoTile: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(statusAccent.opacity(0.13))
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(statusAccent.opacity(0.28), lineWidth: 1)
-            HStack(spacing: 2.5) {
-                ForEach(0 ..< 2, id: \.self) { _ in
-                    VStack(spacing: 2.5) {
-                        ForEach(0 ..< 3, id: \.self) { _ in
-                            Circle()
-                                .fill(statusAccent)
-                                .frame(width: 3, height: 3)
-                        }
-                    }
-                }
-            }
-        }
-        .frame(width: 30, height: 30)
     }
 
     private var statusAccent: Color {
@@ -564,7 +553,12 @@ struct RunbarMenuView: View {
             HStack(alignment: .center, spacing: 10) {
                 ProviderIconTile(provider: item.run.provider, size: 28)
                 VStack(alignment: .leading, spacing: 2) {
-                    runLink(item)
+                    HStack(spacing: 6) {
+                        runLink(item)
+                        if item.run.provider == .githubActions {
+                            workflowBadge(item.run.workflowName)
+                        }
+                    }
                     Text(item.repository.fullName)
                         .font(.mono(10.5))
                         .foregroundStyle(MenuTheme.textSecondary)
@@ -588,15 +582,25 @@ struct RunbarMenuView: View {
                     metaChip(branch, icon: "arrow.triangle.branch")
                 }
                 metaChip(item.run.event, icon: "bolt.fill")
-                Spacer(minLength: 0)
+                Spacer(minLength: 6)
+                FailureLogToggle(expanded: model.expandedLiveLogRunIDs.contains(item.id)) {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        model.toggleLiveLog(for: item)
+                    }
+                }
             }
 
             progressView(for: item)
+
+            if model.expandedLiveLogRunIDs.contains(item.id) {
+                liveLogContent(item)
+            }
 
             if item.run.supportsJobs {
                 DisclosureGroup(isExpanded: jobsBinding(for: item)) {
                     jobsContent(for: item)
                         .padding(.top, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 } label: {
                     Text("jobs & current step")
                         .font(.mono(10, .medium))
@@ -816,6 +820,9 @@ struct RunbarMenuView: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     runLink(item)
+                    if item.run.provider == .githubActions {
+                        workflowBadge(item.run.workflowName)
+                    }
                     if item.matchesLocalHEAD {
                         headBadge
                     }
@@ -880,6 +887,22 @@ struct RunbarMenuView: View {
                 Button("retry") { model.expandFailureLog(for: item) }
                     .buttonStyle(.link)
                     .font(.mono(10, .semibold))
+            }
+        case let .loaded(log):
+            terminalBlock(log.lines)
+        }
+    }
+
+    /// Live build output for a running card, streaming while expanded.
+    @ViewBuilder
+    private func liveLogContent(_ item: MenuBarRun) -> some View {
+        switch model.liveLogState(for: item.id) {
+        case .idle, .loading, .failed:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("waiting for build output…")
+                    .font(.mono(10))
+                    .foregroundStyle(MenuTheme.textSecondary)
             }
         case let .loaded(log):
             terminalBlock(log.lines)
@@ -1081,8 +1104,29 @@ struct RunbarMenuView: View {
 
     // MARK: - Shared
 
+    /// GitHub runs lead with the repository (the project), matching how
+    /// deployment providers lead with the project name; the workflow is shown
+    /// as a badge next to the title instead.
+    private func displayName(_ item: MenuBarRun) -> String {
+        item.run.provider == .githubActions ? item.repository.name : item.run.workflowName
+    }
+
     private func runLink(_ item: MenuBarRun) -> some View {
-        RunTitleLink(title: item.run.workflowName, url: URL(string: item.run.htmlURL))
+        RunTitleLink(title: displayName(item), url: URL(string: item.run.htmlURL))
+    }
+
+    private func workflowBadge(_ name: String) -> some View {
+        Text(name)
+            .font(.mono(8.5, .semibold))
+            .foregroundStyle(MenuTheme.textSecondary)
+            .lineLimit(1)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 4))
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(MenuTheme.border, lineWidth: 1)
+            )
     }
 
     @MainActor
