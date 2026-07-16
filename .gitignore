@@ -9,3 +9,8 @@ xcuserdata/
 # Generated deterministically by bootstrap.sh from project.yml.
 Runbar.xcodeproj/
 build/
+
+# Local tool configuration
+.claude/
+.codex/
+.mcp.json
