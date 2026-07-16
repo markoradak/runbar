@@ -44,10 +44,13 @@ protocol RunCompletionNotifying: Sendable {
 protocol NotificationPreferenceStoring: Sendable {
     func failuresOnly() -> Bool
     func setFailuresOnly(_ failuresOnly: Bool)
+    func mutedRepositoryKeys() -> Set<String>
+    func setMutedRepositoryKeys(_ keys: Set<String>)
 }
 
 final class UserDefaultsNotificationPreferenceStore: NotificationPreferenceStoring, @unchecked Sendable {
     private static let failuresOnlyKey = "notifications.failuresOnly"
+    private static let mutedRepositoriesKey = "notifications.mutedRepositories"
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -60,6 +63,14 @@ final class UserDefaultsNotificationPreferenceStore: NotificationPreferenceStori
 
     func setFailuresOnly(_ failuresOnly: Bool) {
         defaults.set(failuresOnly, forKey: Self.failuresOnlyKey)
+    }
+
+    func mutedRepositoryKeys() -> Set<String> {
+        Set(defaults.stringArray(forKey: Self.mutedRepositoriesKey) ?? [])
+    }
+
+    func setMutedRepositoryKeys(_ keys: Set<String>) {
+        defaults.set(keys.sorted(), forKey: Self.mutedRepositoriesKey)
     }
 }
 

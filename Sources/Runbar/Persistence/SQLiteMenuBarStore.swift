@@ -267,7 +267,8 @@ actor SQLiteMenuBarStore: MenuBarDataStoring {
                 pr.environment, pr.display_title, pr.web_url,
                 CASE WHEN p.current_sha IS NOT NULL AND pr.head_sha != ''
                           AND lower(p.current_sha) = lower(pr.head_sha)
-                     THEN 1 ELSE 0 END
+                     THEN 1 ELSE 0 END,
+                pr.preview_url
             FROM provider_runs pr
             LEFT JOIN repos p ON p.repo_key = pr.repo_key
             WHERE \(statusClause)
@@ -316,7 +317,8 @@ actor SQLiteMenuBarStore: MenuBarDataStoring {
                         actorLogin: nil,
                         triggeringActorLogin: nil,
                         provider: provider,
-                        externalID: externalID
+                        externalID: externalID,
+                        previewURL: text(statement, column: 20)
                     ),
                     repository: RepoIdentity(owner: owner, name: name),
                     matchesLocalHEAD: sqlite3_column_int(statement, 19) != 0,

@@ -22,11 +22,18 @@ actor SQLiteProviderStore: ProviderExecutionStoring {
         }
         do {
             try Self.execute(database: handle, sql: Self.schema)
+            Self.migrateAddingColumn(database: handle, sql: "ALTER TABLE provider_runs ADD COLUMN preview_url TEXT")
         } catch {
             sqlite3_close(handle)
             throw error
         }
         connection = ProviderSQLiteConnection(handle: handle)
+    }
+
+    /// Additive column migration — a duplicate-column failure means the
+    /// column already exists (fresh schema or a previous run), which is fine.
+    private static func migrateAddingColumn(database: OpaquePointer, sql: String) {
+        try? execute(database: database, sql: sql)
     }
 
     static func production() throws -> SQLiteProviderStore {
@@ -73,8 +80,8 @@ actor SQLiteProviderStore: ProviderExecutionStoring {
                 synthetic_id, provider, external_id, repo_key, owner, repo_name,
                 workflow_id, project_key, project_name, status, conclusion,
                 run_started_at, created_at, updated_at, head_branch, head_sha,
-                environment, display_title, web_url
-            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                environment, display_title, web_url, preview_url
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(provider, external_id) DO UPDATE SET
                 synthetic_id = excluded.synthetic_id,
                 repo_key = excluded.repo_key,
@@ -92,7 +99,8 @@ actor SQLiteProviderStore: ProviderExecutionStoring {
                 head_sha = excluded.head_sha,
                 environment = excluded.environment,
                 display_title = excluded.display_title,
-                web_url = excluded.web_url
+                web_url = excluded.web_url,
+                preview_url = excluded.preview_url
             """
         )
         defer { sqlite3_finalize(statement) }
@@ -115,6 +123,7 @@ actor SQLiteProviderStore: ProviderExecutionStoring {
         bind(item.environment, to: statement, index: 17)
         bind(item.displayTitle, to: statement, index: 18)
         bind(item.webURL, to: statement, index: 19)
+        bindOptional(item.previewURL, to: statement, index: 20)
         try stepDone(statement)
     }
 
@@ -141,6 +150,7 @@ actor SQLiteProviderStore: ProviderExecutionStoring {
             environment TEXT NOT NULL,
             display_title TEXT NOT NULL,
             web_url TEXT NOT NULL,
+            preview_url TEXT,
             PRIMARY KEY(provider, external_id)
         );
         CREATE UNIQUE INDEX IF NOT EXISTS provider_runs_synthetic_id_idx

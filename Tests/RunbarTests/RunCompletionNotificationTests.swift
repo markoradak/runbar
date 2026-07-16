@@ -61,6 +61,36 @@ final class RunCompletionNotificationTests: XCTestCase {
         XCTAssertFalse(preferences.failuresOnly())
     }
 
+    func testMutedRepositorySkipsDeliveryAndPersistsPreference() async {
+        let completed = completedRun(id: 5, conclusion: "failure")
+        let store = SequenceNotificationMenuStore(
+            snapshots: [
+                .empty,
+                .init(running: [], recent: [completed])
+            ]
+        )
+        let notifier = RecordingRunCompletionNotifier()
+        let preferences = MemoryNotificationPreferenceStore(failuresOnly: false, muted: ["owner/repo"])
+        let model = notificationModel(
+            store: store,
+            notifier: notifier,
+            failuresOnly: false,
+            preferences: preferences
+        )
+
+        await model.refreshMenuBarRuns()
+        await model.requestNotificationAuthorization()
+        await model.refreshMenuBarRuns()
+
+        let deliveries = await notifier.deliveries()
+        XCTAssertEqual(deliveries, [])
+        XCTAssertTrue(model.isNotificationsMuted(forRepositoryKey: "owner/repo"))
+
+        model.setNotificationsMuted(false, forRepositoryKey: "owner/repo")
+        XCTAssertFalse(model.isNotificationsMuted(forRepositoryKey: "owner/repo"))
+        XCTAssertEqual(preferences.mutedRepositoryKeys(), [])
+    }
+
     private func notificationModel(
         store: SequenceNotificationMenuStore,
         notifier: RecordingRunCompletionNotifier,
@@ -130,13 +160,17 @@ private actor RecordingRunCompletionNotifier: RunCompletionNotifying {
 
 private final class MemoryNotificationPreferenceStore: NotificationPreferenceStoring, @unchecked Sendable {
     private var value: Bool
+    private var muted: Set<String>
 
-    init(failuresOnly: Bool) {
+    init(failuresOnly: Bool, muted: Set<String> = []) {
         value = failuresOnly
+        self.muted = muted
     }
 
     func failuresOnly() -> Bool { value }
     func setFailuresOnly(_ failuresOnly: Bool) { value = failuresOnly }
+    func mutedRepositoryKeys() -> Set<String> { muted }
+    func setMutedRepositoryKeys(_ keys: Set<String>) { muted = keys }
 }
 
 private final class EmptyNotificationCredentialStore: CredentialStore {

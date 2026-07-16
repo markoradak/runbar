@@ -135,6 +135,11 @@ struct GitHubResponse<Value: Sendable>: Sendable {
     let rateLimit: GitHubRateLimit
 }
 
+enum GitHubRunAction: String, Sendable {
+    case rerun
+    case cancel
+}
+
 enum GitHubClientError: Error, Equatable, Sendable {
     case invalidURL
     case authentication

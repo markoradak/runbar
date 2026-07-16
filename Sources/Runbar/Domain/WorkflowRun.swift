@@ -50,6 +50,7 @@ struct WorkflowRun: Equatable, Sendable {
     let triggeringActorLogin: String?
     let provider: ExecutionProvider
     let externalID: String
+    let previewURL: String?
 
     init(
         id: Int64,
@@ -70,7 +71,8 @@ struct WorkflowRun: Equatable, Sendable {
         actorLogin: String?,
         triggeringActorLogin: String?,
         provider: ExecutionProvider = .githubActions,
-        externalID: String? = nil
+        externalID: String? = nil,
+        previewURL: String? = nil
     ) {
         self.id = id
         self.repositoryKey = repositoryKey
@@ -91,6 +93,7 @@ struct WorkflowRun: Equatable, Sendable {
         self.triggeringActorLogin = triggeringActorLogin
         self.provider = provider
         self.externalID = externalID ?? String(id)
+        self.previewURL = previewURL
     }
 
     var isActive: Bool {
@@ -102,4 +105,10 @@ struct WorkflowRun: Equatable, Sendable {
     }
 
     var supportsJobs: Bool { provider == .githubActions }
+
+    /// Cloudflare Pages has no deployment-cancel API; GitHub and Vercel do.
+    var supportsCancel: Bool { provider != .cloudflarePages }
+
+    /// Only GitHub Actions runs can be re-run in place.
+    var supportsRerun: Bool { provider == .githubActions }
 }

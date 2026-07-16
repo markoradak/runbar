@@ -118,6 +118,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
     @ObservedObject private var updater = UpdaterService.shared
+    @ObservedObject private var loginItems = LoginItemService.shared
     @State private var selectedTab: SettingsTab = .general
 
     var body: some View {
@@ -159,7 +160,7 @@ struct SettingsView: View {
 
             sidebarStatus
                 .padding(.horizontal, 10)
-                .padding(.bottom, 6)
+                .padding(.bottom, 18)
         }
         .padding(.horizontal, 10)
         .padding(.top, 46)
@@ -252,6 +253,24 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var generalTab: some View {
+        SettingsCard("Startup") {
+            HStack {
+                Text("Launch at login")
+                    .font(.system(size: 12.5))
+                Spacer()
+                Toggle(
+                    "Launch at login",
+                    isOn: Binding(
+                        get: { loginItems.isEnabled },
+                        set: { loginItems.setEnabled($0) }
+                    )
+                )
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .labelsHidden()
+            }
+        }
+
         SettingsCard("Appearance") {
             HStack {
                 Text("Theme")
@@ -743,6 +762,7 @@ struct SettingsView: View {
                 }
 
                 Spacer()
+                muteButton(for: repository)
                 Toggle(
                     "Exclude",
                     isOn: Binding(
@@ -798,6 +818,23 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: 9)
                 .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
         )
+    }
+
+    private func muteButton(for repository: DiscoveredRepository) -> some View {
+        let key = repository.identity.normalizedKey
+        let muted = model.isNotificationsMuted(forRepositoryKey: key)
+        return Button {
+            model.setNotificationsMuted(!muted, forRepositoryKey: key)
+        } label: {
+            Image(systemName: muted ? "bell.slash.fill" : "bell")
+                .font(.system(size: 11))
+                .foregroundStyle(muted ? Color.orange : Color.secondary)
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(muted ? "Notifications muted — click to unmute" : "Mute notifications for this repository")
+        .accessibilityLabel(muted ? "Unmute notifications" : "Mute notifications")
     }
 
     // MARK: - Advanced

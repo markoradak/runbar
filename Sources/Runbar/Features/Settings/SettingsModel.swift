@@ -57,8 +57,11 @@ final class SettingsModel: ObservableObject {
 
     @Published private(set) var notificationAuthorizationState: RunNotificationAuthorizationState = .notDetermined
     @Published private(set) var notificationsFailuresOnly: Bool
+    @Published private(set) var mutedRepositoryKeys: Set<String>
     @Published private(set) var appearancePreference: AppearancePreference
     @Published private(set) var acknowledgedFailureRunID: Int64?
+    @Published private(set) var runActionsInFlight: Set<Int64> = []
+    @Published private(set) var runActionError: String?
 
     private static let logger = Logger(subsystem: "app.runbar.Runbar", category: "authentication")
     private static let discoveryLogger = Logger(subsystem: "app.runbar.Runbar", category: "discovery")
@@ -134,6 +137,7 @@ final class SettingsModel: ObservableObject {
         self.notificationPreferenceStore = notificationPreferenceStore
         self.appearancePreferenceStore = appearancePreferenceStore
         notificationsFailuresOnly = notificationPreferenceStore.failuresOnly()
+        mutedRepositoryKeys = notificationPreferenceStore.mutedRepositoryKeys()
         appearancePreference = appearancePreferenceStore.appearancePreference()
     }
 
@@ -639,6 +643,19 @@ final class SettingsModel: ObservableObject {
         notificationPreferenceStore.setFailuresOnly(failuresOnly)
     }
 
+    func isNotificationsMuted(forRepositoryKey key: String) -> Bool {
+        mutedRepositoryKeys.contains(key)
+    }
+
+    func setNotificationsMuted(_ muted: Bool, forRepositoryKey key: String) {
+        if muted {
+            mutedRepositoryKeys.insert(key)
+        } else {
+            mutedRepositoryKeys.remove(key)
+        }
+        notificationPreferenceStore.setMutedRepositoryKeys(mutedRepositoryKeys)
+    }
+
     func setAppearancePreference(_ preference: AppearancePreference) {
         appearancePreference = preference
         appearancePreferenceStore.setAppearancePreference(preference)
@@ -657,8 +674,66 @@ final class SettingsModel: ObservableObject {
         for item in newCompletions {
             guard let notification = RunCompletionNotification(run: item) else { continue }
             if notificationsFailuresOnly && !notification.isFailure { continue }
+            if mutedRepositoryKeys.contains(item.run.repositoryKey) { continue }
             try? await notificationNotifier.deliver(notification)
         }
+    }
+
+    // MARK: - Run actions
+
+    func cancelRun(_ item: MenuBarRun) async {
+        guard item.run.supportsCancel, !runActionsInFlight.contains(item.id) else { return }
+        runActionsInFlight.insert(item.id)
+        defer { runActionsInFlight.remove(item.id) }
+        runActionError = nil
+        do {
+            switch item.run.provider {
+            case .githubActions:
+                try await performGitHubRunAction(.cancel, item: item)
+            case .vercel, .cloudflarePages:
+                guard let providerMonitor else { throw ProviderClientError.transport }
+                try await providerMonitor.cancelExecution(
+                    provider: item.run.provider,
+                    externalID: item.run.externalID
+                )
+            }
+            await refreshAfterRunAction(item)
+        } catch {
+            runActionError = "Could not cancel \(item.run.workflowName)."
+        }
+    }
+
+    func rerunRun(_ item: MenuBarRun) async {
+        guard item.run.supportsRerun, !runActionsInFlight.contains(item.id) else { return }
+        runActionsInFlight.insert(item.id)
+        defer { runActionsInFlight.remove(item.id) }
+        runActionError = nil
+        do {
+            try await performGitHubRunAction(.rerun, item: item)
+            await refreshAfterRunAction(item)
+        } catch {
+            runActionError = "Could not re-run \(item.run.workflowName)."
+        }
+    }
+
+    private func performGitHubRunAction(_ action: GitHubRunAction, item: MenuBarRun) async throws {
+        guard let githubClient else { throw GitHubClientError.transport }
+        guard let token = try await credentialProvider.readCredential(), !token.isEmpty else {
+            throw GitHubClientError.authentication
+        }
+        try await githubClient.performRunAction(
+            action,
+            repository: item.repository,
+            runID: item.run.id,
+            token: token
+        )
+    }
+
+    private func refreshAfterRunAction(_ item: MenuBarRun) async {
+        if item.run.provider == .githubActions, let pollScheduler, pollSchedulerSnapshot.isRunning {
+            await pollScheduler.reconcile(trigger: .manual)
+        }
+        await refreshMenuBarRuns()
     }
 
     func manualRefresh() async {

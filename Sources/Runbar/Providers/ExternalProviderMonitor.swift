@@ -130,6 +130,16 @@ actor ExternalProviderMonitor: LocalPushPolling {
         await refreshAll()
     }
 
+    /// Cancels a running execution at its provider, then refreshes so the
+    /// canceled state shows up promptly.
+    func cancelExecution(provider: ExecutionProvider, externalID: String) async throws {
+        guard let token = tokens[provider], let client = clients[provider] else {
+            throw ProviderClientError.authentication
+        }
+        try await client.cancel(externalID: externalID, token: token)
+        await refreshAll()
+    }
+
     func handleLocalPush(repositoryKey _: String) async -> Date? {
         guard !tokens.isEmpty else { return nil }
         let startedAt = now()

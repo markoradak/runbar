@@ -99,8 +99,14 @@ struct CloudflarePagesClient: ExternalProviderClient {
             headSHA: metadata?.commitHash ?? "",
             environment: (deployment.environment ?? "deployment").capitalized,
             displayTitle: metadata?.commitMessage ?? project.name,
-            webURL: deployment.url ?? "https://dash.cloudflare.com"
+            webURL: deployment.url ?? "https://dash.cloudflare.com",
+            previewURL: deployment.url
         )
+    }
+
+    /// Cloudflare Pages has no deployment-cancel API.
+    func cancel(externalID _: String, token _: String) async throws {
+        throw ProviderClientError.invalidResponse
     }
 
     private func normalize(

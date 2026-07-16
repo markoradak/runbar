@@ -32,6 +32,43 @@ struct ProviderExecution: Equatable, Sendable {
     let environment: String
     let displayTitle: String
     let webURL: String
+    let previewURL: String?
+
+    init(
+        provider: ExecutionProvider,
+        externalID: String,
+        repository: RepoIdentity,
+        projectKey: String,
+        projectName: String,
+        status: String,
+        conclusion: String?,
+        startedAt: Date?,
+        createdAt: Date,
+        updatedAt: Date,
+        headBranch: String?,
+        headSHA: String,
+        environment: String,
+        displayTitle: String,
+        webURL: String,
+        previewURL: String? = nil
+    ) {
+        self.provider = provider
+        self.externalID = externalID
+        self.repository = repository
+        self.projectKey = projectKey
+        self.projectName = projectName
+        self.status = status
+        self.conclusion = conclusion
+        self.startedAt = startedAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.headBranch = headBranch
+        self.headSHA = headSHA
+        self.environment = environment
+        self.displayTitle = displayTitle
+        self.webURL = webURL
+        self.previewURL = previewURL
+    }
 
     var syntheticID: Int64 {
         StableProviderID.run(provider: provider, externalID: externalID)
@@ -63,7 +100,8 @@ struct ProviderExecution: Equatable, Sendable {
             actorLogin: nil,
             triggeringActorLogin: nil,
             provider: provider,
-            externalID: externalID
+            externalID: externalID,
+            previewURL: previewURL
         )
     }
 }
@@ -140,6 +178,9 @@ enum ProviderClientError: Error, Equatable, Sendable {
 protocol ExternalProviderClient: Sendable {
     var provider: ExecutionProvider { get }
     func fetch(token: String) async throws -> ProviderFetchResult
+    /// Cancels a running execution. Providers without a cancel API throw
+    /// `ProviderClientError.invalidResponse`.
+    func cancel(externalID: String, token: String) async throws
 }
 
 protocol ProviderExecutionStoring: Sendable {

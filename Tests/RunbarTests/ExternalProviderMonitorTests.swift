@@ -152,6 +152,8 @@ private actor StubExternalProviderClient: ExternalProviderClient {
     func fetch(token: String) async throws -> ProviderFetchResult {
         try result.get()
     }
+
+    func cancel(externalID _: String, token _: String) async throws {}
 }
 
 private actor MemoryProviderExecutionStore: ProviderExecutionStoring {
