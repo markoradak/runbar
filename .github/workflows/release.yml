@@ -1,0 +1,85 @@
+name: Release
+
+# Triggered by scripts/release.sh pushing a v* tag:
+#   build (Release, ad-hoc signed) → zip → generate signed Sparkle appcast →
+#   publish zip + appcast.xml to the public runbar-app/runbar-releases repo.
+#
+# Required repository secrets:
+#   SPARKLE_PRIVATE_KEY  EdDSA private key for appcast signing. Export it with:
+#                        <sparkle-bin>/generate_keys -x /dev/stdout
+#   RELEASES_TOKEN       Fine-grained PAT with contents:write on
+#                        runbar-app/runbar-releases (GITHUB_TOKEN cannot write
+#                        to another repo).
+#
+# Note: builds are ad-hoc signed. For public distribution add a Developer ID
+# Application certificate + notarization in the Build step.
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: macos-latest
+    env:
+      RELEASES_REPO: runbar-app/runbar-releases
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$XCODE" ]; then
+            XCODE="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          fi
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Resolve version from tag
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: |
+          xcodegen generate
+          xcodebuild -project Runbar.xcodeproj -scheme Runbar \
+            -configuration Release \
+            -derivedDataPath build/DerivedData \
+            -destination 'platform=macOS' \
+            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- \
+            build
+
+      - name: Package
+        run: |
+          APP="build/DerivedData/Build/Products/Release/Runbar.app"
+          test -d "$APP"
+          mkdir -p build/staging
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "build/staging/Runbar-$VERSION.zip"
+
+      - name: Generate signed appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          SPARKLE_BIN="$(find build/DerivedData/SourcePackages/artifacts -type d -name bin -path '*parkle*' | head -1)"
+          test -n "$SPARKLE_BIN"
+          echo "$SPARKLE_PRIVATE_KEY" | "$SPARKLE_BIN/generate_appcast" \
+            --ed-key-file - \
+            --download-url-prefix "https://github.com/$RELEASES_REPO/releases/download/$TAG/" \
+            --maximum-versions 1 \
+            build/staging
+
+      - name: Publish to releases repo
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+        run: |
+          gh release create "$TAG" \
+            --repo "$RELEASES_REPO" \
+            --title "Runbar $VERSION" \
+            --notes "Runbar $VERSION" \
+            "build/staging/Runbar-$VERSION.zip" \
+            "build/staging/appcast.xml"

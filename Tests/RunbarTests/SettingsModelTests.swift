@@ -62,6 +62,21 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertNil(store.token)
         XCTAssertEqual(model.state, .signedOut)
     }
+
+    func testStatusBarSettingsActionCreatesAndShowsRetainedWindow() {
+        let model = SettingsModel(
+            credentialStore: MemoryCredentialStore(),
+            authValidator: StubAuthValidator.success(login: "unused")
+        )
+        let controller = StatusBarController(model: model)
+
+        controller.presentSettings()
+
+        XCTAssertEqual(controller.settingsWindow?.title, "Runbar Settings")
+        XCTAssertEqual(controller.settingsWindow?.isVisible, true)
+        XCTAssertEqual(controller.settingsWindow?.isReleasedWhenClosed, false)
+        controller.settingsWindow?.close()
+    }
 }
 
 private final class MemoryCredentialStore: CredentialStore {

@@ -1,5 +1,35 @@
 import Foundation
 
+enum ExecutionProvider: String, CaseIterable, Codable, Hashable, Sendable {
+    case githubActions = "github_actions"
+    case vercel
+    case cloudflarePages = "cloudflare_pages"
+
+    var displayName: String {
+        switch self {
+        case .githubActions: "GitHub Actions"
+        case .vercel: "Vercel"
+        case .cloudflarePages: "Cloudflare Pages"
+        }
+    }
+
+    var shortName: String {
+        switch self {
+        case .githubActions: "GitHub"
+        case .vercel: "Vercel"
+        case .cloudflarePages: "Cloudflare"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .githubActions: "chevron.left.forwardslash.chevron.right"
+        case .vercel: "triangle.fill"
+        case .cloudflarePages: "cloud.fill"
+        }
+    }
+}
+
 struct WorkflowRun: Equatable, Sendable {
     let id: Int64
     let repositoryKey: String
@@ -18,6 +48,50 @@ struct WorkflowRun: Equatable, Sendable {
     let runAttempt: Int
     let actorLogin: String?
     let triggeringActorLogin: String?
+    let provider: ExecutionProvider
+    let externalID: String
+
+    init(
+        id: Int64,
+        repositoryKey: String,
+        workflowID: Int64,
+        workflowName: String,
+        status: String,
+        conclusion: String?,
+        runStartedAt: Date?,
+        createdAt: Date,
+        updatedAt: Date,
+        headBranch: String?,
+        headSHA: String,
+        event: String,
+        displayTitle: String,
+        htmlURL: String,
+        runAttempt: Int,
+        actorLogin: String?,
+        triggeringActorLogin: String?,
+        provider: ExecutionProvider = .githubActions,
+        externalID: String? = nil
+    ) {
+        self.id = id
+        self.repositoryKey = repositoryKey
+        self.workflowID = workflowID
+        self.workflowName = workflowName
+        self.status = status
+        self.conclusion = conclusion
+        self.runStartedAt = runStartedAt
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.headBranch = headBranch
+        self.headSHA = headSHA
+        self.event = event
+        self.displayTitle = displayTitle
+        self.htmlURL = htmlURL
+        self.runAttempt = runAttempt
+        self.actorLogin = actorLogin
+        self.triggeringActorLogin = triggeringActorLogin
+        self.provider = provider
+        self.externalID = externalID ?? String(id)
+    }
 
     var isActive: Bool {
         status == "queued" || status == "in_progress"
@@ -26,4 +100,6 @@ struct WorkflowRun: Equatable, Sendable {
     var completedAt: Date? {
         status == "completed" ? updatedAt : nil
     }
+
+    var supportsJobs: Bool { provider == .githubActions }
 }

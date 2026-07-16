@@ -11,6 +11,9 @@ packages:
   Yams:
     url: https://github.com/jpsim/Yams.git
     from: 6.2.2
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: 2.6.0
 
 settings:
   base:
@@ -32,12 +35,22 @@ targets:
       - path: Sources/Runbar
     dependencies:
       - package: Yams
+      - package: Sparkle
       - sdk: libsqlite3.tbd
+    info:
+      path: Sources/Runbar/Info.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSApplicationCategoryType: public.app-category.developer-tools
+        LSUIElement: true
+        SUEnableAutomaticChecks: true
+        SUFeedURL: https://github.com/runbar-app/runbar-releases/releases/latest/download/appcast.xml
+        SUPublicEDKey: FJ+L6Mt5uoedQYpem04aA6kLG09B0KIei2OPu43zW4I=
     settings:
       base:
         ENABLE_APP_SANDBOX: NO
-        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
-        INFOPLIST_KEY_LSUIElement: YES
+        GENERATE_INFOPLIST_FILE: NO
         PRODUCT_BUNDLE_IDENTIFIER: app.runbar.Runbar
         PRODUCT_NAME: Runbar
 

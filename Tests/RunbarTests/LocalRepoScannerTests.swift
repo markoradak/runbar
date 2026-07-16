@@ -27,7 +27,7 @@ final class LocalRepoScannerTests: XCTestCase {
         XCTAssertEqual(result.repositories.map(\.identity.fullName), ["depth/four"])
     }
 
-    func testRequiresRegularYMLOrYAMLWorkflowAndParsesBothExtensions() throws {
+    func testIncludesProviderOnlyRepositoriesAndParsesYMLAndYAMLWorkflows() throws {
         try makeRepository(
             at: "qualifying",
             ownerRepo: "owner/qualifying",
@@ -50,20 +50,25 @@ final class LocalRepoScannerTests: XCTestCase {
 
         let result = try LocalRepoScanner().scan(codeRoot: temporaryDirectory)
 
-        XCTAssertEqual(result.repositories.map(\.identity.fullName), ["owner/qualifying"])
-        XCTAssertEqual(result.repositories[0].workflows.map(\.fileName), ["ci.yml", "nightly.yaml"])
-        XCTAssertEqual(result.repositories[0].workflows[0].events, ["pull_request", "push"])
-        XCTAssertNotNil(result.repositories[0].localActivityAt)
-        XCTAssertTrue(
-            result.skippedRepositories.contains(
-                .init(relativePath: "github-only", reason: .githubWithoutWorkflowFiles)
-            )
+        XCTAssertEqual(
+            result.repositories.map(\.identity.fullName),
+            ["owner/github-only", "owner/qualifying", "owner/wrong-extension"]
         )
-        XCTAssertTrue(
-            result.skippedRepositories.contains(
-                .init(relativePath: "wrong-extension", reason: .githubWithoutWorkflowFiles)
-            )
+        let qualifying = try XCTUnwrap(
+            result.repositories.first(where: { $0.identity.fullName == "owner/qualifying" })
         )
+        XCTAssertEqual(qualifying.workflows.map(\.fileName), ["ci.yml", "nightly.yaml"])
+        XCTAssertEqual(qualifying.workflows[0].events, ["pull_request", "push"])
+        XCTAssertNotNil(qualifying.localActivityAt)
+        XCTAssertEqual(
+            result.repositories.first(where: { $0.identity.fullName == "owner/github-only" })?.workflows,
+            []
+        )
+        XCTAssertEqual(
+            result.repositories.first(where: { $0.identity.fullName == "owner/wrong-extension" })?.workflows,
+            []
+        )
+        XCTAssertTrue(result.skippedRepositories.isEmpty)
     }
 
     func testNonGitHubOriginIsRejected() throws {

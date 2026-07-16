@@ -65,7 +65,7 @@ enum MenuBarIconState: Equatable, Sendable {
     var systemImage: String {
         switch self {
         case .running: "bolt.circle.fill"
-        case .idle: "circle.fill"
+        case .idle: "circle.dashed"
         case .recentFailure: "exclamationmark.circle.fill"
         case .degraded: "wifi.exclamationmark"
         case .authenticationRequired: "person.crop.circle.badge.exclamationmark"
@@ -74,11 +74,11 @@ enum MenuBarIconState: Equatable, Sendable {
 
     var statusText: String {
         switch self {
-        case let .running(count): String(count) + " workflow" + (count == 1 ? "" : "s") + " running"
-        case .idle: "All workflows clear"
+        case let .running(count): String(count) + " build" + (count == 1 ? "" : "s") + " running"
+        case .idle: "All builds clear"
         case .recentFailure: "Recent failure needs attention"
         case .degraded: "Polling slowed to protect rate limit"
-        case .authenticationRequired: "GitHub setup required"
+        case .authenticationRequired: "Provider setup required"
         }
     }
 
@@ -96,14 +96,16 @@ enum MenuBarIconState: Equatable, Sendable {
         isAuthenticated: Bool,
         isDegraded: Bool,
         runningCount: Int,
-        recent: [MenuBarRun]
+        recent: [MenuBarRun],
+        acknowledgedFailureRunID: Int64? = nil
     ) -> MenuBarIconState {
         guard isAuthenticated else { return .authenticationRequired }
         if isDegraded { return .degraded }
         if runningCount > 0 { return .running(count: runningCount) }
 
         if let newestCompletedRun = recent.first,
-           WorkflowRunPresentation.isFailure(newestCompletedRun.run.conclusion) {
+           WorkflowRunPresentation.isFailure(newestCompletedRun.run.conclusion),
+           newestCompletedRun.id != acknowledgedFailureRunID {
             return .recentFailure
         }
         return .idle
@@ -180,4 +182,17 @@ enum WorkflowRunPresentation {
         return ["failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"]
             .contains(conclusion)
     }
+}
+
+enum MenuBarActivityIndicatorStyle {
+    static let width: CGFloat = 10
+    static let height: CGFloat = 13
+    static let dotDiameter: CGFloat = 2.3
+    static let columnSpacing: CGFloat = 2.2
+    static let rowSpacing: CGFloat = 1.3
+    static let idleOpacity: CGFloat = 0.58
+    static let inactiveOpacity: CGFloat = 0.20
+    static let trailingOpacity: CGFloat = 0.52
+    static let animationFramesPerSecond: Double = 8
+    static let animationFrameCount = 6
 }

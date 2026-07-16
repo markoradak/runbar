@@ -171,7 +171,7 @@ enum GitHubClientError: Error, Equatable, Sendable {
         case .secondaryRateLimit:
             "GitHub asked Runbar to slow down; requests are backing off."
         case .accessDenied:
-            "This repository is not accessible to the saved fine-grained token."
+            "This repository is not included in an accessible Runbar GitHub App installation."
         case .missingETag:
             "GitHub did not provide the ETag required for safe polling."
         case .missingCachedBody:

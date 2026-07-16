@@ -24,6 +24,13 @@ enum ETagVerificationState: Equatable {
     case failed(message: String)
 }
 
+enum GitHubDeviceSignInState: Equatable {
+    case idle
+    case requestingCode
+    case awaitingAuthorization(userCode: String, verificationURL: URL)
+    case failed(message: String)
+}
+
 @MainActor
 final class SettingsModel: ObservableObject {
     @Published var tokenInput = ""
@@ -44,15 +51,23 @@ final class SettingsModel: ObservableObject {
     @Published private(set) var workflowJobs: [Int64: WorkflowJobsState] = [:]
     @Published private(set) var isManualRefreshRunning = false
     @Published private(set) var retryingRepositoryKeys: Set<String> = []
+    @Published private(set) var deviceSignInState: GitHubDeviceSignInState = .idle
+    @Published var providerTokenInputs: [ExecutionProvider: String] = [:]
+    @Published private(set) var providerMonitorSnapshot: ProviderMonitorSnapshot = .idle
 
     @Published private(set) var notificationAuthorizationState: RunNotificationAuthorizationState = .notDetermined
     @Published private(set) var notificationsFailuresOnly: Bool
+    @Published private(set) var appearancePreference: AppearancePreference
+    @Published private(set) var acknowledgedFailureRunID: Int64?
 
     private static let logger = Logger(subsystem: "app.runbar.Runbar", category: "authentication")
     private static let discoveryLogger = Logger(subsystem: "app.runbar.Runbar", category: "discovery")
 
     private let credentialStore: any CredentialStore
+    private let credentialProvider: any PollCredentialProviding
     private let authValidator: any AuthValidating
+    private let githubAppAuthenticator: (any GitHubAppAuthenticating)?
+    private let githubAppSession: (any GitHubAppSessionManaging)?
     private let repoDiscovery: RepoDiscovery?
     private let discoveryInitializationError: String?
     private let githubClient: GitHubClient?
@@ -61,11 +76,15 @@ final class SettingsModel: ObservableObject {
     private let gitWatcher: GitWatcher?
     private let menuBarStore: (any MenuBarDataStoring)?
     private let workflowJobsLoader: (any WorkflowJobsLoading)?
+    private let providerCredentialStore: ProviderCredentialStore
+    private let providerMonitor: ExternalProviderMonitor?
     private let menuBarClock: any MenuBarClock
     private let notificationNotifier: (any RunCompletionNotifying)?
     private let notificationPreferenceStore: any NotificationPreferenceStoring
+    private let appearancePreferenceStore: any AppearancePreferenceStoring
     private var hasLoaded = false
     private var isObservingPollScheduler = false
+    private var isObservingProviderMonitor = false
     private var periodicRefreshTask: Task<Void, Never>?
     private var wakeObservationTask: Task<Void, Never>?
     private var menuBarTimerTask: Task<Void, Never>?
@@ -75,7 +94,10 @@ final class SettingsModel: ObservableObject {
 
     init(
         credentialStore: any CredentialStore,
+        credentialProvider: (any PollCredentialProviding)? = nil,
         authValidator: any AuthValidating,
+        githubAppAuthenticator: (any GitHubAppAuthenticating)? = nil,
+        githubAppSession: (any GitHubAppSessionManaging)? = nil,
         repoDiscovery: RepoDiscovery? = nil,
         discoveryInitializationError: String? = nil,
         githubClient: GitHubClient? = nil,
@@ -84,12 +106,19 @@ final class SettingsModel: ObservableObject {
         gitWatcher: GitWatcher? = nil,
         menuBarStore: (any MenuBarDataStoring)? = nil,
         workflowJobsLoader: (any WorkflowJobsLoading)? = nil,
+        providerCredentialStore: ProviderCredentialStore = .production,
+        providerMonitor: ExternalProviderMonitor? = nil,
         menuBarClock: any MenuBarClock = SystemMenuBarClock(),
         notificationNotifier: (any RunCompletionNotifying)? = nil,
-        notificationPreferenceStore: any NotificationPreferenceStoring = UserDefaultsNotificationPreferenceStore()
+        notificationPreferenceStore: any NotificationPreferenceStoring = UserDefaultsNotificationPreferenceStore(),
+        appearancePreferenceStore: any AppearancePreferenceStoring = UserDefaultsAppearancePreferenceStore()
     ) {
         self.credentialStore = credentialStore
+        self.credentialProvider = credentialProvider
+            ?? KeychainPollCredentialProvider(credentialStore: credentialStore)
         self.authValidator = authValidator
+        self.githubAppAuthenticator = githubAppAuthenticator
+        self.githubAppSession = githubAppSession
         self.repoDiscovery = repoDiscovery
         self.discoveryInitializationError = discoveryInitializationError
         self.githubClient = githubClient
@@ -98,10 +127,14 @@ final class SettingsModel: ObservableObject {
         self.gitWatcher = gitWatcher
         self.menuBarStore = menuBarStore
         self.workflowJobsLoader = workflowJobsLoader
+        self.providerCredentialStore = providerCredentialStore
+        self.providerMonitor = providerMonitor
         self.menuBarClock = menuBarClock
         self.notificationNotifier = notificationNotifier
         self.notificationPreferenceStore = notificationPreferenceStore
+        self.appearancePreferenceStore = appearancePreferenceStore
         notificationsFailuresOnly = notificationPreferenceStore.failuresOnly()
+        appearancePreference = appearancePreferenceStore.appearancePreference()
     }
 
     deinit {
@@ -141,11 +174,20 @@ final class SettingsModel: ObservableObject {
 
     var menuBarIconState: MenuBarIconState {
         MenuBarIconState.resolve(
-            isAuthenticated: authenticatedLogin != nil,
+            isAuthenticated: hasAnyConnectedProvider,
             isDegraded: pollSchedulerSnapshot.isRateLimitDegraded,
             runningCount: menuBarRuns.running.count,
-            recent: menuBarRuns.recent
+            recent: menuBarRuns.recent,
+            acknowledgedFailureRunID: acknowledgedFailureRunID
         )
+    }
+
+    var hasAnyConnectedProvider: Bool {
+        authenticatedLogin != nil || providerMonitorSnapshot.hasConnectedProvider
+    }
+
+    func providerState(_ provider: ExecutionProvider) -> ProviderConnectionState {
+        providerMonitorSnapshot.connections[provider] ?? .disconnected
     }
 
     var includedRepositoryCount: Int {
@@ -172,10 +214,12 @@ final class SettingsModel: ObservableObject {
         guard !hasLoaded else { return }
         hasLoaded = true
         await startPollSchedulerObservation()
+        await startProviderMonitorObservation()
         startWakeObservation()
         await refreshMenuBarRuns()
         await requestNotificationAuthorization()
         await loadStoredCredential()
+        await loadStoredProviderCredentials()
         startPeriodicRefresh()
     }
 
@@ -184,7 +228,7 @@ final class SettingsModel: ObservableObject {
 
         let token: String
         do {
-            guard let storedToken = try credentialStore.readToken() else {
+            guard let storedToken = try await credentialProvider.readCredential() else {
                 state = .signedOut
                 await stopPollScheduler()
                 await refreshDiscovery(token: nil)
@@ -209,6 +253,65 @@ final class SettingsModel: ObservableObject {
             Self.logger.error("Stored GitHub credential validation failed")
             await stopPollScheduler()
             await refreshDiscovery(token: nil)
+        }
+    }
+
+    func beginGitHubAppSignIn() async {
+        guard let githubAppAuthenticator, let githubAppSession else {
+            deviceSignInState = .failed(message: "Runbar's GitHub App is not configured.")
+            return
+        }
+
+        state = .validating
+        deviceSignInState = .requestingCode
+        do {
+            let authorization = try await githubAppAuthenticator.requestDeviceAuthorization()
+            deviceSignInState = .awaitingAuthorization(
+                userCode: authorization.userCode,
+                verificationURL: authorization.verificationURL
+            )
+            NSWorkspace.shared.open(authorization.verificationURL)
+
+            var pollingInterval = authorization.pollingInterval
+            while Date() < authorization.expiresAt {
+                if pollingInterval > 0 {
+                    try await Task.sleep(for: .seconds(pollingInterval))
+                }
+                do {
+                    let credential = try await githubAppAuthenticator.pollForCredential(
+                        deviceCode: authorization.deviceCode
+                    )
+                    let user = try await authValidator.validate(token: credential.accessToken)
+                    try await githubAppSession.saveCredential(credential)
+                    try? credentialStore.deleteToken()
+                    state = .authenticated(login: user.login)
+                    deviceSignInState = .idle
+                    Self.logger.notice(
+                        "Authorized the Runbar GitHub App for login \(user.login, privacy: .public) and saved its credential in Keychain"
+                    )
+                    await refreshDiscovery(token: credential.accessToken)
+                    return
+                } catch GitHubAppAuthError.authorizationPending {
+                    continue
+                } catch GitHubAppAuthError.slowDown {
+                    pollingInterval += 5
+                    continue
+                }
+            }
+            throw GitHubAppAuthError.expired
+        } catch is CancellationError {
+            state = .signedOut
+            deviceSignInState = .idle
+        } catch let error as GitHubAppAuthError {
+            state = .failed(message: error.userMessage, hasStoredCredential: false)
+            deviceSignInState = .failed(message: error.userMessage)
+        } catch let error as AuthValidationError {
+            state = .failed(message: error.userMessage, hasStoredCredential: false)
+            deviceSignInState = .failed(message: error.userMessage)
+        } catch {
+            let message = safeCredentialMessage(error)
+            state = .failed(message: message, hasStoredCredential: false)
+            deviceSignInState = .failed(message: message)
         }
     }
 
@@ -242,6 +345,21 @@ final class SettingsModel: ObservableObject {
     }
 
     func deleteCredential() {
+        if let githubAppSession {
+            state = .signedOut
+            deviceSignInState = .idle
+            Task {
+                do {
+                    try await githubAppSession.deleteCredential()
+                    Self.logger.notice("Removed the GitHub App credential from Keychain")
+                    await stopPollScheduler()
+                    await refreshDiscovery(token: nil)
+                } catch {
+                    state = .failed(message: safeCredentialMessage(error), hasStoredCredential: true)
+                }
+            }
+            return
+        }
         do {
             try credentialStore.deleteToken()
             tokenInput = ""
@@ -258,6 +376,63 @@ final class SettingsModel: ObservableObject {
 
     func retryStoredCredential() async {
         await loadStoredCredential()
+    }
+
+    func saveProviderToken(_ provider: ExecutionProvider) async {
+        guard let providerMonitor else { return }
+        let candidate = providerTokenInputs[provider, default: ""]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !candidate.isEmpty else {
+            providerMonitorSnapshot.connections[provider] = .failed(
+                message: CredentialStoreError.invalidToken.localizedDescription,
+                hasStoredCredential: providerState(provider).hasStoredCredential
+            )
+            return
+        }
+        providerTokenInputs[provider] = ""
+        do {
+            _ = try await providerMonitor.connect(provider: provider, token: candidate)
+            do {
+                try providerCredentialStore.saveToken(candidate, for: provider)
+            } catch {
+                await providerMonitor.disconnect(provider: provider)
+                throw error
+            }
+            providerMonitorSnapshot = await providerMonitor.snapshot()
+            await configureGitWatcher()
+            await refreshMenuBarRuns()
+        } catch let error as ProviderClientError {
+            providerMonitorSnapshot.connections[provider] = .failed(
+                message: error.userMessage,
+                hasStoredCredential: providerCredentialExists(provider)
+            )
+        } catch {
+            providerMonitorSnapshot.connections[provider] = .failed(
+                message: safeCredentialMessage(error),
+                hasStoredCredential: providerCredentialExists(provider)
+            )
+        }
+    }
+
+    func deleteProviderCredential(_ provider: ExecutionProvider) async {
+        do {
+            try providerCredentialStore.deleteToken(for: provider)
+            await providerMonitor?.disconnect(provider: provider)
+            if let providerMonitor { providerMonitorSnapshot = await providerMonitor.snapshot() }
+            await configureGitWatcher()
+            await refreshMenuBarRuns()
+        } catch {
+            providerMonitorSnapshot.connections[provider] = .failed(
+                message: safeCredentialMessage(error),
+                hasStoredCredential: true
+            )
+        }
+    }
+
+    func retryProvider(_ provider: ExecutionProvider) async {
+        guard let token = try? providerCredentialStore.readToken(for: provider) else { return }
+        providerTokenInputs[provider] = token
+        await saveProviderToken(provider)
     }
 
     func chooseCodeRoot(_ url: URL) async {
@@ -277,7 +452,7 @@ final class SettingsModel: ObservableObject {
     func refreshRepositories() async {
         let token: String?
         do {
-            token = try credentialStore.readToken()
+            token = try await credentialProvider.readCredential()
         } catch {
             discoveryState = .failed(message: safeCredentialMessage(error))
             return
@@ -311,8 +486,8 @@ final class SettingsModel: ObservableObject {
 
         let token: String
         do {
-            guard let storedToken = try credentialStore.readToken() else {
-                repositoryAccessNotice = "Save a GitHub credential before retrying repository access."
+            guard let storedToken = try await credentialProvider.readCredential() else {
+                repositoryAccessNotice = "Connect the Runbar GitHub App before retrying repository access."
                 return
             }
             token = storedToken
@@ -342,7 +517,7 @@ final class SettingsModel: ObservableObject {
                 if let index = discoveredRepositories.firstIndex(where: { candidate in candidate.id == repository.id }) {
                     discoveredRepositories[index].isAccessible = false
                 }
-                repositoryAccessNotice = "GitHub still denies this repository. Add it to the fine-grained token, or obtain resource-owner approval, then retry."
+                repositoryAccessNotice = "GitHub still denies this repository. Add Runbar to that organization or repository, then retry."
                 await configureMonitoring()
             } else {
                 repositoryAccessNotice = error.userMessage
@@ -365,8 +540,8 @@ final class SettingsModel: ObservableObject {
 
         let token: String
         do {
-            guard let storedToken = try credentialStore.readToken() else {
-                etagVerificationState = .failed(message: "Save a GitHub credential before running the ETag check.")
+            guard let storedToken = try await credentialProvider.readCredential() else {
+                etagVerificationState = .failed(message: "Connect the Runbar GitHub App before running the ETag check.")
                 return
             }
             token = storedToken
@@ -419,13 +594,25 @@ final class SettingsModel: ObservableObject {
 
     func menuBarDidAppear() {
         isMenuBarVisible = true
+        acknowledgeRecentFailureIfNeeded()
         restartMenuBarTimerIfNeeded()
     }
 
     func menuBarDidDisappear() {
         isMenuBarVisible = false
+        acknowledgeRecentFailureIfNeeded()
         menuBarTimerTask?.cancel()
         menuBarTimerTask = nil
+    }
+
+    /// Opening the menu counts as seeing the newest failure, so the menu bar
+    /// icon returns to idle instead of showing the failure badge forever. A
+    /// newer failed run gets a different ID and re-triggers the badge.
+    private func acknowledgeRecentFailureIfNeeded() {
+        guard let newestCompletedRun = menuBarRuns.recent.first,
+              WorkflowRunPresentation.isFailure(newestCompletedRun.run.conclusion)
+        else { return }
+        acknowledgedFailureRunID = newestCompletedRun.id
     }
 
     func refreshMenuBarRuns() async {
@@ -438,7 +625,7 @@ final class SettingsModel: ObservableObject {
             menuBarLoadError = nil
             restartMenuBarTimerIfNeeded()
         } catch {
-            menuBarLoadError = "Runbar could not read persisted workflow runs."
+            menuBarLoadError = "Runbar could not read persisted build and deployment history."
         }
     }
 
@@ -450,6 +637,11 @@ final class SettingsModel: ObservableObject {
     func setNotificationsFailuresOnly(_ failuresOnly: Bool) {
         notificationsFailuresOnly = failuresOnly
         notificationPreferenceStore.setFailuresOnly(failuresOnly)
+    }
+
+    func setAppearancePreference(_ preference: AppearancePreference) {
+        appearancePreference = preference
+        appearancePreferenceStore.setAppearancePreference(preference)
     }
 
     private func processCompletionNotifications(in snapshot: MenuBarRunSnapshot) async {
@@ -476,6 +668,7 @@ final class SettingsModel: ObservableObject {
         if let pollScheduler, pollSchedulerSnapshot.isRunning {
             await pollScheduler.reconcile(trigger: .manual)
         }
+        await providerMonitor?.refreshAll()
         await refreshMenuBarRuns()
     }
 
@@ -493,14 +686,15 @@ final class SettingsModel: ObservableObject {
     }
 
     func loadJobs(for run: MenuBarRun) async {
+        guard run.run.supportsJobs else { return }
         guard let workflowJobsLoader else {
             workflowJobs[run.id] = .failed("Runbar could not initialize the jobs loader.")
             return
         }
         workflowJobs[run.id] = .loading
         do {
-            guard let token = try credentialStore.readToken() else {
-                workflowJobs[run.id] = .failed("Save a GitHub credential to load jobs.")
+            guard let token = try await credentialProvider.readCredential() else {
+                workflowJobs[run.id] = .failed("Connect the Runbar GitHub App to load jobs.")
                 return
             }
             let result = try await workflowJobsLoader.loadJobs(for: run, token: token)
@@ -534,6 +728,7 @@ final class SettingsModel: ObservableObject {
                 self.menuBarNow = now
                 if let store = self.menuBarStore {
                     for item in self.menuBarRuns.running {
+                        guard item.run.provider == .githubActions else { continue }
                         guard let elapsed = WorkflowRunPresentation.elapsedSeconds(
                             startedAt: item.run.runStartedAt,
                             now: now
@@ -573,14 +768,15 @@ final class SettingsModel: ObservableObject {
     }
 
     private func startWakeObservation() {
-        guard wakeObservationTask == nil, pollScheduler != nil else { return }
+        guard wakeObservationTask == nil, pollScheduler != nil || providerMonitor != nil else { return }
         wakeObservationTask = Task { @MainActor [weak self] in
             let notifications = NSWorkspace.shared.notificationCenter.notifications(
                 named: NSWorkspace.didWakeNotification
             )
             for await _ in notifications {
-                guard !Task.isCancelled, let self, let scheduler = self.pollScheduler else { return }
-                await scheduler.handleWake()
+                guard !Task.isCancelled, let self else { return }
+                await self.pollScheduler?.handleWake()
+                await self.providerMonitor?.handleWake()
             }
         }
     }
@@ -607,6 +803,44 @@ final class SettingsModel: ObservableObject {
         }
     }
 
+    private func startProviderMonitorObservation() async {
+        guard !isObservingProviderMonitor, let providerMonitor else { return }
+        isObservingProviderMonitor = true
+        await providerMonitor.setEventHandler { [weak self] snapshot in
+            await self?.receiveProviderMonitorSnapshot(snapshot)
+        }
+    }
+
+    private func receiveProviderMonitorSnapshot(_ snapshot: ProviderMonitorSnapshot) async {
+        let previousSync = providerMonitorSnapshot.lastSyncAt
+        providerMonitorSnapshot = snapshot
+        if snapshot.lastSyncAt != previousSync {
+            await configureGitWatcher()
+            await refreshMenuBarRuns()
+        }
+    }
+
+    private func loadStoredProviderCredentials() async {
+        guard let providerMonitor else { return }
+        var tokens: [ExecutionProvider: String] = [:]
+        for provider in [ExecutionProvider.vercel, .cloudflarePages] {
+            do {
+                if let token = try providerCredentialStore.readToken(for: provider) {
+                    tokens[provider] = token
+                }
+            } catch {
+                providerMonitorSnapshot.connections[provider] = .failed(
+                    message: safeCredentialMessage(error),
+                    hasStoredCredential: false
+                )
+            }
+        }
+        await providerMonitor.configure(tokens: tokens)
+        providerMonitorSnapshot = await providerMonitor.snapshot()
+        await configureGitWatcher()
+        await refreshMenuBarRuns()
+    }
+
     private func configureMonitoring() async {
         await configurePollScheduler()
         await configureGitWatcher()
@@ -614,7 +848,7 @@ final class SettingsModel: ObservableObject {
 
     private func configureGitWatcher() async {
         guard let gitWatcher else { return }
-        guard authenticatedLogin != nil else {
+        guard hasAnyConnectedProvider else {
             await gitWatcher.stop()
             gitWatchedRepositoryCount = 0
             return
@@ -650,7 +884,7 @@ final class SettingsModel: ObservableObject {
     }
 
     private func stopPollScheduler() async {
-        if let gitWatcher {
+        if let gitWatcher, !providerMonitorSnapshot.hasConnectedProvider {
             await gitWatcher.stop()
             gitWatchedRepositoryCount = 0
         }
@@ -705,7 +939,7 @@ final class SettingsModel: ObservableObject {
                 discoveredRepositories[index].isAccessible = false
             }
             if firstNotice {
-                repositoryAccessNotice = "\(repository.identity.fullName) is inaccessible to the saved fine-grained token and will no longer be polled."
+                repositoryAccessNotice = "\(repository.identity.fullName) is outside the Runbar GitHub App installation and will no longer be polled."
             }
             selectDefaultVerificationRepositoryIfNeeded()
             etagVerificationState = .failed(message: error.userMessage)
@@ -725,12 +959,18 @@ final class SettingsModel: ObservableObject {
         catch { return hasStoredCredential }
     }
 
+    private func providerCredentialExists(_ provider: ExecutionProvider) -> Bool {
+        do { return try providerCredentialStore.readToken(for: provider) != nil }
+        catch { return providerState(provider).hasStoredCredential }
+    }
+
     private func safeAuthMessage(_ error: Error) -> String {
         (error as? AuthValidationError)?.userMessage ?? AuthValidationError.transport.userMessage
     }
 
     private func safeCredentialMessage(_ error: Error) -> String {
-        (error as? CredentialStoreError)?.localizedDescription
+        if let appError = error as? GitHubAppAuthError { return appError.userMessage }
+        return (error as? CredentialStoreError)?.localizedDescription
             ?? "The macOS Keychain operation failed."
     }
 

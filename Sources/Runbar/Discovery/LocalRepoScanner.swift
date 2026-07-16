@@ -100,16 +100,6 @@ struct LocalRepoScanner: Sendable {
         }
 
         let workflowFiles = regularWorkflowFiles(repositoryURL: repositoryURL)
-        guard !workflowFiles.isEmpty else {
-            let githubDirectory = repositoryURL.appendingPathComponent(".github", isDirectory: true)
-            let values = try? githubDirectory.resourceValues(forKeys: [.isDirectoryKey])
-            let reason: LocalScanSkipReason = values?.isDirectory == true
-                ? .githubWithoutWorkflowFiles
-                : .noWorkflowFiles
-            skipped.append(.init(relativePath: relativePath, reason: reason))
-            return
-        }
-
         let workflows = workflowFiles.map { fileURL -> WorkflowMetadata in
             (try? workflowParser.parse(fileURL: fileURL))
                 ?? WorkflowMetadata(

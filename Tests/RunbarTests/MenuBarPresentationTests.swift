@@ -78,13 +78,50 @@ final class MenuBarPresentationTests: XCTestCase {
         )
     }
 
+    func testAcknowledgedFailureResolvesIdleUntilANewerFailureArrives() {
+        let now = Date(timeIntervalSince1970: 100_000)
+        let failure = menuRun(conclusion: "failure", updatedAt: now)
+
+        // Acknowledging the newest failed run clears the badge.
+        XCTAssertEqual(
+            MenuBarIconState.resolve(
+                isAuthenticated: true,
+                isDegraded: false,
+                runningCount: 0,
+                recent: [failure],
+                acknowledgedFailureRunID: failure.id
+            ),
+            .idle
+        )
+        // A different (newer) failed run re-triggers the badge.
+        XCTAssertEqual(
+            MenuBarIconState.resolve(
+                isAuthenticated: true,
+                isDegraded: false,
+                runningCount: 0,
+                recent: [failure],
+                acknowledgedFailureRunID: failure.id + 1
+            ),
+            .recentFailure
+        )
+    }
+
     func testModernIconSymbolsAndStatusCopyAreUnambiguous() {
-        XCTAssertEqual(MenuBarIconState.idle.systemImage, "circle.fill")
-        XCTAssertEqual(MenuBarIconState.idle.statusText, "All workflows clear")
+        XCTAssertEqual(MenuBarIconState.idle.systemImage, "circle.dashed")
+        XCTAssertEqual(MenuBarIconState.idle.statusText, "All builds clear")
         XCTAssertEqual(MenuBarIconState.recentFailure.systemImage, "exclamationmark.circle.fill")
         XCTAssertEqual(MenuBarIconState.recentFailure.statusText, "Recent failure needs attention")
-        XCTAssertEqual(MenuBarIconState.running(count: 1).statusText, "1 workflow running")
-        XCTAssertEqual(MenuBarIconState.running(count: 2).statusText, "2 workflows running")
+        XCTAssertEqual(MenuBarIconState.running(count: 1).statusText, "1 build running")
+        XCTAssertEqual(MenuBarIconState.running(count: 2).statusText, "2 builds running")
+    }
+
+    func testActivityLoaderIsACompactTwoByThreeDotGrid() {
+        XCTAssertEqual(MenuBarActivityIndicatorStyle.animationFrameCount, 6)
+        XCTAssertLessThan(MenuBarActivityIndicatorStyle.width, MenuBarActivityIndicatorStyle.height)
+        XCTAssertGreaterThan(MenuBarActivityIndicatorStyle.dotDiameter, 2)
+        XCTAssertLessThan(MenuBarActivityIndicatorStyle.inactiveOpacity, MenuBarActivityIndicatorStyle.idleOpacity)
+        XCTAssertLessThan(MenuBarActivityIndicatorStyle.idleOpacity, 1)
+        XCTAssertLessThanOrEqual(MenuBarActivityIndicatorStyle.animationFramesPerSecond, 8)
     }
 
     func testProgressUsesNoHistoryEstimateAndHonestOverrunStates() {

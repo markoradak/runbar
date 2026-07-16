@@ -4,61 +4,82 @@ struct PollSchedulerStatusView: View {
     @ObservedObject var model: SettingsModel
 
     var body: some View {
-        Section("Polling scheduler") {
-            if model.pollSchedulerSnapshot.isRateLimitDegraded {
-                Label(
-                    "Rate-limit protection is active; every poll interval is widened 4×.",
-                    systemImage: "exclamationmark.triangle.fill"
-                )
-                .foregroundStyle(.orange)
-            } else if model.pollSchedulerSnapshot.isRunning {
-                Label("Scheduler running", systemImage: "clock.badge.checkmark")
-                    .foregroundStyle(.green)
-            } else {
-                Label("Scheduler waiting for an authenticated repository set", systemImage: "clock")
-                    .foregroundStyle(.secondary)
-            }
-
-            HStack(spacing: 18) {
-                tierLabel(.hot, title: "Hot", interval: "8s")
-                tierLabel(.warm, title: "Warm", interval: "60s")
-                tierLabel(.cold, title: "Cold", interval: "10m")
-                Spacer()
-            }
-
-            Text("Watching \(model.gitWatchedRepositoryCount) local repositories for loose and packed Git refs.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
+        SettingsCard(
+            "Polling scheduler",
+            footer: "Watching \(model.gitWatchedRepositoryCount) local repositories for loose and packed Git refs. Launch and wake reconciliation poll every included accessible repository through the explicit ETag client. Every regular interval receives independent ±15% jitter."
+        ) {
             HStack {
-                Text("Poll attempts: \(model.pollSchedulerSnapshot.totalPollAttempts)")
-                Text("Quota-consuming: \(model.pollSchedulerSnapshot.quotaConsumingRequests)")
+                Text("Scheduler status")
+                    .font(.system(size: 12.5))
+                Spacer()
+                schedulerPill
+            }
+
+            HStack(spacing: 8) {
+                tierTile(.hot, title: "hot", interval: "8s")
+                tierTile(.warm, title: "warm", interval: "60s")
+                tierTile(.cold, title: "cold", interval: "10m")
+                statTile(
+                    value: "\(model.gitWatchedRepositoryCount)",
+                    label: "git watched"
+                )
+            }
+
+            HStack(spacing: 14) {
+                Text("attempts \(model.pollSchedulerSnapshot.totalPollAttempts)")
+                Text("quota-consuming \(model.pollSchedulerSnapshot.quotaConsumingRequests)")
                 Spacer()
                 if let remaining = model.pollSchedulerSnapshot.rateLimit.remaining {
-                    Text("Remaining: \(remaining)")
+                    Text("remaining \(remaining)")
+                        .foregroundStyle(
+                            model.pollSchedulerSnapshot.isRateLimitDegraded ? .orange : .secondary
+                        )
                 }
             }
-            .font(.caption.monospacedDigit())
+            .font(SettingsUI.mono(10.5))
+            .foregroundStyle(.secondary)
 
             if let resetAt = model.pollSchedulerSnapshot.rateLimit.resetAt {
                 Text("Rate limit resets \(resetAt.formatted(date: .omitted, time: .shortened)).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-
-            Text("Launch and wake reconciliation poll every included accessible repository through the explicit ETag client. Every regular interval receives independent ±15% jitter.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 
-    private func tierLabel(_ tier: PollingTier, title: String, interval: String) -> some View {
+    @ViewBuilder
+    private var schedulerPill: some View {
+        if model.pollSchedulerSnapshot.isRateLimitDegraded {
+            SettingsStatusPill(text: "rate-limit protection · 4× intervals", color: .orange)
+        } else if model.pollSchedulerSnapshot.isRunning {
+            SettingsStatusPill(text: "running", color: .green)
+        } else {
+            SettingsStatusPill(text: "waiting for repositories", color: .secondary)
+        }
+    }
+
+    private func tierTile(_ tier: PollingTier, title: String, interval: String) -> some View {
+        statTile(
+            value: "\(model.pollSchedulerSnapshot.tierCounts[tier, default: 0])",
+            label: "\(title) · \(interval)"
+        )
+    }
+
+    private func statTile(value: String, label: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("\(title): \(model.pollSchedulerSnapshot.tierCounts[tier, default: 0])")
-                .fontWeight(.medium)
-            Text(interval)
-                .font(.caption)
+            Text(value)
+                .font(SettingsUI.mono(15, .bold))
+            Text(label)
+                .font(SettingsUI.mono(9))
                 .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        )
     }
 }

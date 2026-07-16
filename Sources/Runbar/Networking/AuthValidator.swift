@@ -19,11 +19,11 @@ enum AuthValidationError: Error, Equatable, Sendable {
     var userMessage: String {
         switch self {
         case .invalidToken:
-            "GitHub rejected this token. Check that it is active and copied completely."
+            "GitHub rejected the saved credential. Connect the Runbar GitHub App again."
         case .insufficientPermissions:
-            "GitHub denied access. The token needs Actions, Metadata, and Contents read permission, and may require organization approval."
+            "GitHub denied access. The Runbar GitHub App needs read access to Actions, Metadata, and Contents."
         case let .unexpectedStatus(status):
-            "GitHub returned HTTP \(status) while validating the token."
+            "GitHub returned HTTP \(status) while validating the credential."
         case .invalidResponse:
             "GitHub returned an invalid response."
         case .invalidPayload:

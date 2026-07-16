@@ -14,25 +14,11 @@ struct GitHubRemoteRepoDiscovery: RemoteRepositoryDiscovering {
     func discover(token: String) async throws -> [RemoteRepository] {
         guard !token.isEmpty else { throw RepoDiscoveryError.remoteUnauthorized }
 
-        let endpoint = GitHubEndpoint(
-            pathSegments: ["user", "repos"],
-            queryItems: [
-                .init(name: "sort", value: "pushed"),
-                .init(name: "direction", value: "desc"),
-                .init(name: "per_page", value: "100")
-            ]
-        )
-        let payload: [GitHubRepositoryResponse]
-        do {
-            payload = try await client.get(
-                [GitHubRepositoryResponse].self,
-                endpoint: endpoint,
-                token: token
-            ).value
-        } catch let error as GitHubClientError {
-            throw map(error)
-        } catch {
-            throw RepoDiscoveryError.remoteTransport
+        let installations = try await loadInstallations(token: token)
+
+        var payload: [GitHubRepositoryResponse] = []
+        for installation in installations {
+            payload.append(contentsOf: try await loadRepositories(installationID: installation.id, token: token))
         }
 
         let repositories = payload.compactMap { item -> RemoteRepository? in
@@ -54,6 +40,67 @@ struct GitHubRemoteRepoDiscovery: RemoteRepositoryDiscovering {
         }
         .prefix(30)
         .map { $0 }
+    }
+
+    private func loadInstallations(token: String) async throws -> [GitHubInstallationResponse] {
+        var page = 1
+        var installations: [GitHubInstallationResponse] = []
+        while true {
+            let response: GitHubInstallationsResponse = try await get(
+                GitHubInstallationsResponse.self,
+                endpoint: GitHubEndpoint(
+                    pathSegments: ["user", "installations"],
+                    queryItems: [
+                        .init(name: "page", value: String(page)),
+                        .init(name: "per_page", value: "100")
+                    ]
+                ),
+                token: token
+            )
+            installations.append(contentsOf: response.installations)
+            guard installations.count < response.totalCount, !response.installations.isEmpty else { break }
+            page += 1
+        }
+        return installations
+    }
+
+    private func loadRepositories(
+        installationID: Int64,
+        token: String
+    ) async throws -> [GitHubRepositoryResponse] {
+        var page = 1
+        var repositories: [GitHubRepositoryResponse] = []
+        while true {
+            let response: GitHubInstallationRepositoriesResponse = try await get(
+                GitHubInstallationRepositoriesResponse.self,
+                endpoint: GitHubEndpoint(
+                    pathSegments: ["user", "installations", String(installationID), "repositories"],
+                    queryItems: [
+                        .init(name: "page", value: String(page)),
+                        .init(name: "per_page", value: "100")
+                    ]
+                ),
+                token: token
+            )
+            repositories.append(contentsOf: response.repositories)
+            guard repositories.count < response.totalCount, !response.repositories.isEmpty else { break }
+            page += 1
+        }
+        return repositories
+    }
+
+    private func get<Response: Decodable & Sendable>(
+        _ type: Response.Type,
+        endpoint: GitHubEndpoint,
+        token: String
+    ) async throws -> Response {
+        do {
+            return try await client.get(type, endpoint: endpoint, token: token).value
+        } catch let error as GitHubClientError {
+            throw map(error)
+        } catch {
+            throw RepoDiscoveryError.remoteTransport
+        }
     }
 
     private func map(_ error: GitHubClientError) -> RepoDiscoveryError {
@@ -78,6 +125,30 @@ struct GitHubRemoteRepoDiscovery: RemoteRepositoryDiscovering {
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let date = fractional.date(from: value) { return date }
         return ISO8601DateFormatter().date(from: value)
+    }
+}
+
+private struct GitHubInstallationsResponse: Decodable, Sendable {
+    let totalCount: Int
+    let installations: [GitHubInstallationResponse]
+
+    enum CodingKeys: String, CodingKey {
+        case totalCount = "total_count"
+        case installations
+    }
+}
+
+private struct GitHubInstallationResponse: Decodable, Sendable {
+    let id: Int64
+}
+
+private struct GitHubInstallationRepositoriesResponse: Decodable, Sendable {
+    let totalCount: Int
+    let repositories: [GitHubRepositoryResponse]
+
+    enum CodingKeys: String, CodingKey {
+        case totalCount = "total_count"
+        case repositories
     }
 }
 

@@ -26,6 +26,27 @@ final class KeychainCredentialStoreTests: XCTestCase {
         }
     }
 
+    func testGitHubAppCredentialRoundTripsOnlyThroughKeychain() throws {
+        let store = KeychainGitHubAppCredentialStore(
+            service: "app.runbar.RunbarTests.\(UUID().uuidString)",
+            account: "github-app-integration-test"
+        )
+        let credential = GitHubAppCredential(
+            accessToken: "github-app-access-marker",
+            accessTokenExpiresAt: Date(timeIntervalSince1970: 1_800_000_000),
+            refreshToken: "github-app-refresh-marker",
+            refreshTokenExpiresAt: Date(timeIntervalSince1970: 1_810_000_000)
+        )
+        try? store.deleteCredential()
+        defer { try? store.deleteCredential() }
+
+        XCTAssertNil(try store.readCredential())
+        try store.saveCredential(credential)
+        XCTAssertEqual(try store.readCredential(), credential)
+        try store.deleteCredential()
+        XCTAssertNil(try store.readCredential())
+    }
+
     private func makeStore() -> KeychainCredentialStore {
         KeychainCredentialStore(
             service: "app.runbar.RunbarTests.\(UUID().uuidString)",

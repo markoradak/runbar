@@ -4,19 +4,18 @@ struct GitHubDebugPane: View {
     @ObservedObject var model: SettingsModel
 
     var body: some View {
-        Section("GitHub ETag debug") {
-            Text("Runs one warm request plus ten measured requests against one unchanged repository. Only sanitized request metadata is retained; authorization and bodies are never recorded.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            HStack {
+        SettingsCard(
+            "GitHub ETag debug",
+            footer: "Runs one warm request plus ten measured requests against one unchanged repository. Only sanitized request metadata is retained; authorization and bodies are never recorded."
+        ) {
+            HStack(spacing: 10) {
                 Picker("Repository", selection: $model.verificationRepositoryKey) {
                     ForEach(model.verificationRepositories) { repository in
                         Text(repository.identity.fullName).tag(repository.id)
                     }
                 }
                 .labelsHidden()
-                .frame(maxWidth: 360)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 Button("Run 10-poll check") {
                     Task { await model.runETagVerification() }
@@ -61,8 +60,13 @@ struct GitHubDebugPane: View {
                     .foregroundStyle(.secondary)
             }
         case .succeeded:
-            Label("Last ten requests were 304 with a non-decreasing remaining limit.", systemImage: "checkmark.seal.fill")
-                .foregroundStyle(.green)
+            HStack {
+                Text("Last ten requests were 304 with a non-decreasing remaining limit.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                SettingsStatusPill(text: "verified", color: .green)
+            }
         case let .failed(message):
             Label(message, systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
