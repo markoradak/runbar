@@ -110,10 +110,4 @@ struct WorkflowRun: Equatable, Sendable {
     }
 
     var supportsJobs: Bool { provider == .githubActions }
-
-    /// Cloudflare Pages has no deployment-cancel API; GitHub and Vercel do.
-    var supportsCancel: Bool { provider != .cloudflarePages }
-
-    /// Only GitHub Actions runs can be re-run in place.
-    var supportsRerun: Bool { provider == .githubActions }
 }

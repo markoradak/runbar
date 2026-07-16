@@ -104,11 +104,6 @@ struct CloudflarePagesClient: ExternalProviderClient {
         )
     }
 
-    /// Cloudflare Pages has no deployment-cancel API.
-    func cancel(externalID _: String, token _: String) async throws {
-        throw ProviderClientError.invalidResponse
-    }
-
     /// Returns build-log lines for a deployment (newest last). The account is
     /// recovered from `projectKey`, which is stored as "accountID/projectName".
     func logLines(externalID: String, projectKey: String, token: String) async throws -> [String] {

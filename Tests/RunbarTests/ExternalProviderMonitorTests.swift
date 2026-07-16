@@ -96,6 +96,90 @@ final class ExternalProviderMonitorTests: XCTestCase {
         XCTAssertEqual(expiredInterval, ExternalProviderMonitor.idleInterval)
     }
 
+    /// A 429 carries `Retry-After`. Honouring it is the whole point: the poll
+    /// loop must not keep hitting a provider that just asked us to stop.
+    func testRateLimitedProviderIsNotPolledAgainUntilRetryAfterPasses() async throws {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let clock = MutableClock(now: start)
+        // Deliberately longer than the 300s idle base, so the assertion proves
+        // Retry-After stretched the interval rather than the base covering it.
+        let retryAt = start.addingTimeInterval(600)
+        let client = SequencedExternalProviderClient(
+            provider: .vercel,
+            results: [
+                .success(Self.fetchResult(remaining: 900, at: start)),
+                .failure(.rateLimited(retryAt: retryAt))
+            ],
+            fallback: .success(Self.fetchResult(remaining: 900, at: start))
+        )
+        let monitor = ExternalProviderMonitor(
+            clients: [client],
+            store: MemoryProviderExecutionStore(),
+            now: { clock.now() }
+        )
+        try await monitor.connect(provider: .vercel, token: "token")
+        let afterConnect = await client.fetchCount()
+        XCTAssertEqual(afterConnect, 1)
+
+        // The 429 lands and is recorded.
+        await monitor.refreshAll()
+        let afterRateLimit = await client.fetchCount()
+        XCTAssertEqual(afterRateLimit, 2)
+        let degraded = await monitor.snapshot()
+        XCTAssertTrue(degraded.isRateLimitDegraded)
+
+        // The next interval covers the Retry-After rather than the 300s idle base.
+        let backoffInterval = await monitor.currentPollInterval()
+        XCTAssertEqual(backoffInterval, .seconds(600))
+
+        // Any refresh before Retry-After must not touch the provider.
+        clock.advance(by: 300)
+        await monitor.refreshAll()
+        let duringBackoff = await client.fetchCount()
+        XCTAssertEqual(duringBackoff, 2, "Polled a provider that asked us to wait")
+
+        // Once it passes, polling resumes and the degraded flag clears.
+        clock.advance(by: 301)
+        await monitor.refreshAll()
+        let afterBackoff = await client.fetchCount()
+        XCTAssertEqual(afterBackoff, 3)
+        let recovered = await monitor.snapshot()
+        XCTAssertFalse(recovered.isRateLimitDegraded)
+    }
+
+    func testLowRemainingQuotaWidensThePollInterval() async throws {
+        let now = Date(timeIntervalSince1970: 2_000)
+        let client = SequencedExternalProviderClient(
+            provider: .vercel,
+            results: [],
+            fallback: .success(
+                Self.fetchResult(remaining: ExternalProviderMonitor.degradationThreshold - 1, at: now)
+            )
+        )
+        let monitor = ExternalProviderMonitor(
+            clients: [client],
+            store: MemoryProviderExecutionStore(),
+            now: { now }
+        )
+        try await monitor.connect(provider: .vercel, token: "token")
+
+        let interval = await monitor.currentPollInterval()
+        XCTAssertEqual(interval, ExternalProviderMonitor.idleInterval * ExternalProviderMonitor.degradedIntervalMultiplier)
+        let snapshot = await monitor.snapshot()
+        XCTAssertTrue(snapshot.isRateLimitDegraded)
+    }
+
+    private static func fetchResult(remaining: Int, at date: Date) -> ProviderFetchResult {
+        ProviderFetchResult(
+            provider: .vercel,
+            accountLabel: "Studio",
+            executions: [],
+            projectCount: 0,
+            rateLimit: ProviderRateLimit(remaining: remaining, resetAt: nil),
+            fetchedAt: date
+        )
+    }
+
     func testRejectedTokenProducesActionableFailedState() async {
         let client = StubExternalProviderClient(
             provider: .cloudflarePages,
@@ -153,11 +237,41 @@ private actor StubExternalProviderClient: ExternalProviderClient {
         try result.get()
     }
 
-    func cancel(externalID _: String, token _: String) async throws {}
 
     func logLines(externalID _: String, projectKey _: String, token _: String) async throws -> [String] {
         []
     }
+}
+
+/// Yields `results` in order, then `fallback` forever, and counts fetches so a
+/// test can assert that a provider was *not* contacted.
+private actor SequencedExternalProviderClient: ExternalProviderClient {
+    nonisolated let provider: ExecutionProvider
+    private var results: [Result<ProviderFetchResult, ProviderClientError>]
+    private let fallback: Result<ProviderFetchResult, ProviderClientError>
+    private var fetches = 0
+
+    init(
+        provider: ExecutionProvider,
+        results: [Result<ProviderFetchResult, ProviderClientError>],
+        fallback: Result<ProviderFetchResult, ProviderClientError>
+    ) {
+        self.provider = provider
+        self.results = results
+        self.fallback = fallback
+    }
+
+    func fetch(token _: String) async throws -> ProviderFetchResult {
+        fetches += 1
+        guard !results.isEmpty else { return try fallback.get() }
+        return try results.removeFirst().get()
+    }
+
+    func logLines(externalID _: String, projectKey _: String, token _: String) async throws -> [String] {
+        []
+    }
+
+    func fetchCount() -> Int { fetches }
 }
 
 private actor MemoryProviderExecutionStore: ProviderExecutionStoring {

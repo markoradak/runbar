@@ -89,37 +89,6 @@ struct VercelClient: ExternalProviderClient {
         )
     }
 
-    /// Cancels a running deployment. The deployments list spans the personal
-    /// scope and every team, but cancel requires the owning scope's teamId —
-    /// which is not stored — so try the personal scope first and then each
-    /// team until one accepts.
-    func cancel(externalID: String, token: String) async throws {
-        let teamsResponse: HTTPResult<VercelTeamsEnvelope> = try await get(
-            path: "/v2/teams",
-            query: [URLQueryItem(name: "limit", value: "100")],
-            token: token
-        )
-        let teamIDs: [String?] = [nil] + teamsResponse.value.teams.map { $0.id }
-        var lastError: ProviderClientError = .invalidResponse
-        for teamID in teamIDs {
-            var query: [URLQueryItem] = []
-            if let teamID { query.append(URLQueryItem(name: "teamId", value: teamID)) }
-            do {
-                try await send(
-                    method: "PATCH",
-                    path: "/v12/deployments/\(externalID)/cancel",
-                    query: query,
-                    token: token
-                )
-                return
-            } catch let error as ProviderClientError {
-                // Wrong scope reads as permission/not-found; try the next one.
-                lastError = error
-            }
-        }
-        throw lastError
-    }
-
     /// Returns build-log lines for a deployment (newest last). Uses the same
     /// scope retry as `cancel` because events also require the owning teamId.
     func logLines(externalID: String, projectKey _: String, token: String) async throws -> [String] {
@@ -151,25 +120,6 @@ struct VercelClient: ExternalProviderClient {
             }
         }
         throw lastError
-    }
-
-    private func send(
-        method: String,
-        path: String,
-        query: [URLQueryItem],
-        token: String
-    ) async throws {
-        guard var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)
-        else { throw ProviderClientError.invalidResponse }
-        components.queryItems = query.isEmpty ? nil : query
-        guard let url = components.url else { throw ProviderClientError.invalidResponse }
-        var request = ProviderHTTP.request(url: url, token: token)
-        request.httpMethod = method
-        let response: HTTPURLResponse
-        do { (_, response) = try await transport.send(request) }
-        catch let error as ProviderClientError { throw error }
-        catch { throw ProviderClientError.transport }
-        try ProviderHTTP.validate(response)
     }
 
     private func normalize(state: String) -> (status: String, conclusion: String?) {

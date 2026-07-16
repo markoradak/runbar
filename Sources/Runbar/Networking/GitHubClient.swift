@@ -32,42 +32,6 @@ actor GitHubClient {
         self.now = now
     }
 
-    /// Fire-and-forget workflow-run actions (re-run, cancel). These bypass
-    /// the ETag cache entirely — they are writes, not polls.
-    func performRunAction(
-        _ action: GitHubRunAction,
-        repository: RepoIdentity,
-        runID: Int64,
-        token: String
-    ) async throws {
-        guard !token.isEmpty else { throw GitHubClientError.authentication }
-        let path = "repos/\(repository.owner)/\(repository.name)/actions/runs/\(runID)/\(action.rawValue)"
-        var request = URLRequest(
-            url: baseURL.appendingPathComponent(path),
-            cachePolicy: .reloadIgnoringLocalAndRemoteCacheData,
-            timeoutInterval: 30
-        )
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue(Self.acceptHeader, forHTTPHeaderField: "Accept")
-        request.setValue(Self.apiVersion, forHTTPHeaderField: "X-GitHub-Api-Version")
-
-        let response: HTTPURLResponse
-        do {
-            (_, response) = try await transport.send(request)
-        } catch {
-            throw (error as? GitHubClientError) ?? .transport
-        }
-        switch response.statusCode {
-        case 200...299:
-            return
-        case 401:
-            throw GitHubClientError.authentication
-        default:
-            throw GitHubClientError.unexpectedStatus(response.statusCode)
-        }
-    }
-
     /// Downloads a job's plain-text log. GitHub answers with a 302 to blob
     /// storage whose SAS URL must be fetched WITHOUT the Authorization
     /// header, so the redirect is followed manually.

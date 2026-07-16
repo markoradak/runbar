@@ -133,6 +133,10 @@ struct ProviderMonitorSnapshot: Equatable, Sendable {
     var isRefreshing: Bool
     var activeExecutionCount: Int
     var rateLimits: [ExecutionProvider: ProviderRateLimit]
+    /// True while a provider is low on quota or is serving a `Retry-After`, so
+    /// polling has been widened. Surfaced next to the GitHub-side degraded
+    /// state (docs/ARCHITECTURE.md, invariant 5).
+    var isRateLimitDegraded: Bool
 
     static let idle = ProviderMonitorSnapshot(
         connections: [
@@ -142,7 +146,8 @@ struct ProviderMonitorSnapshot: Equatable, Sendable {
         lastSyncAt: nil,
         isRefreshing: false,
         activeExecutionCount: 0,
-        rateLimits: [:]
+        rateLimits: [:],
+        isRateLimitDegraded: false
     )
 
     var hasConnectedProvider: Bool {
@@ -179,9 +184,6 @@ enum ProviderClientError: Error, Equatable, Sendable {
 protocol ExternalProviderClient: Sendable {
     var provider: ExecutionProvider { get }
     func fetch(token: String) async throws -> ProviderFetchResult
-    /// Cancels a running execution. Providers without a cancel API throw
-    /// `ProviderClientError.invalidResponse`.
-    func cancel(externalID: String, token: String) async throws
     /// Returns the raw log lines of an execution (newest last), capped by the
     /// provider client to a reasonable amount for tail display.
     func logLines(externalID: String, projectKey: String, token: String) async throws -> [String]

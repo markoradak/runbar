@@ -89,7 +89,6 @@ private extension Font {
 private struct RowActionButton: View {
     let icon: String
     let help: String
-    var busy: Bool = false
     let action: () -> Void
     @State private var hovered = false
 
@@ -100,20 +99,13 @@ private struct RowActionButton: View {
                     .fill(Color.primary.opacity(hovered ? 0.12 : 0.05))
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .strokeBorder(MenuTheme.border, lineWidth: 1)
-                if busy {
-                    ProgressView()
-                        .controlSize(.small)
-                        .scaleEffect(0.45)
-                } else {
-                    Image(systemName: icon)
-                        .font(.system(size: 8.5, weight: .semibold))
-                        .foregroundStyle(hovered ? MenuTheme.textPrimary : MenuTheme.textSecondary)
-                }
+                Image(systemName: icon)
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .foregroundStyle(hovered ? MenuTheme.textPrimary : MenuTheme.textSecondary)
             }
             .frame(width: 20, height: 20)
         }
         .buttonStyle(.plain)
-        .disabled(busy)
         .onHover { hovered = $0 }
         .help(help)
         .accessibilityLabel(help)
@@ -374,7 +366,8 @@ struct RunbarMenuView: View {
     @ViewBuilder
     private var connectionBadge: some View {
         switch model.state {
-        case .authenticated where model.pollSchedulerSnapshot.isRateLimitDegraded:
+        case .authenticated where model.pollSchedulerSnapshot.isRateLimitDegraded
+            || model.providerMonitorSnapshot.isRateLimitDegraded:
             statusPill(text: "degraded", color: MenuTheme.amber)
         case let .authenticated(login):
             statusPill(text: "@\(login)", color: MenuTheme.green)
@@ -464,7 +457,7 @@ struct RunbarMenuView: View {
     private var runList: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
-                if let error = model.menuBarLoadError ?? model.runActionError {
+                if let error = model.menuBarLoadError {
                     errorBanner(error)
                 }
                 runningSection
@@ -566,15 +559,6 @@ struct RunbarMenuView: View {
                 }
                 Spacer(minLength: 8)
                 elapsedBadge(item)
-                if item.run.supportsCancel {
-                    rowActionButton(
-                        icon: "stop.fill",
-                        help: "Cancel this run",
-                        busy: model.runActionsInFlight.contains(item.id)
-                    ) {
-                        Task { await model.cancelRun(item) }
-                    }
-                }
             }
 
             HStack(spacing: 6) {
@@ -639,31 +623,22 @@ struct RunbarMenuView: View {
     /// Trailing slot of a recent row: the timestamp at rest, crossfading to
     /// the row's actions on hover — so every row's right edge stays aligned.
     @ViewBuilder
-    private func recentRowTrailing(_ item: MenuBarRun, failed: Bool) -> some View {
-        let canRerun = failed && item.run.supportsRerun
+    private func recentRowTrailing(_ item: MenuBarRun) -> some View {
         let previewLink = item.run.previewURL.flatMap(URL.init(string:))
-        let isBusy = model.runActionsInFlight.contains(item.id)
-        let showActions = (hoveredRunID == item.id || isBusy) && (canRerun || previewLink != nil)
+        let showActions = hoveredRunID == item.id && previewLink != nil
 
         ZStack(alignment: .trailing) {
             Text(WorkflowRunPresentation.relativeText(date: item.run.createdAt, now: model.menuBarNow))
                 .font(.mono(9.5))
                 .foregroundStyle(MenuTheme.textSecondary)
                 .opacity(showActions ? 0 : 1)
-            HStack(spacing: 4) {
-                if canRerun {
-                    rowActionButton(icon: "arrow.clockwise", help: "Re-run this workflow", busy: isBusy) {
-                        Task { await model.rerunRun(item) }
-                    }
+            if let previewLink {
+                rowActionButton(icon: "safari", help: "Open deployment") {
+                    NSWorkspace.shared.open(previewLink)
                 }
-                if let previewLink {
-                    rowActionButton(icon: "safari", help: "Open deployment") {
-                        NSWorkspace.shared.open(previewLink)
-                    }
-                }
+                .opacity(showActions ? 1 : 0)
+                .allowsHitTesting(showActions)
             }
-            .opacity(showActions ? 1 : 0)
-            .allowsHitTesting(showActions)
         }
         .animation(.easeOut(duration: 0.12), value: showActions)
     }
@@ -671,10 +646,9 @@ struct RunbarMenuView: View {
     private func rowActionButton(
         icon: String,
         help: String,
-        busy: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
-        RowActionButton(icon: icon, help: help, busy: busy, action: action)
+        RowActionButton(icon: icon, help: help, action: action)
     }
 
     private func metaChip(_ text: String, icon: String) -> some View {
@@ -827,7 +801,7 @@ struct RunbarMenuView: View {
                         headBadge
                     }
                     Spacer(minLength: 6)
-                    recentRowTrailing(item, failed: failed)
+                    recentRowTrailing(item)
                 }
                 HStack(spacing: 6) {
                     Text(item.repository.fullName)
