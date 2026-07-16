@@ -999,7 +999,7 @@ final class SettingsModel: ObservableObject {
     private func loadStoredProviderCredentials() async {
         guard let providerMonitor else { return }
         var tokens: [ExecutionProvider: String] = [:]
-        for provider in [ExecutionProvider.vercel, .cloudflarePages] {
+        for provider in ExecutionProvider.externalProviders {
             do {
                 if let token = try providerCredentialStore.readToken(for: provider) {
                     tokens[provider] = token

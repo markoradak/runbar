@@ -46,7 +46,7 @@ targets:
         LSApplicationCategoryType: public.app-category.developer-tools
         LSUIElement: true
         SUEnableAutomaticChecks: true
-        SUFeedURL: https://github.com/runbar-app/runbar-releases/releases/latest/download/appcast.xml
+        SUFeedURL: https://github.com/markoradak/runbar/releases/latest/download/appcast.xml
         SUPublicEDKey: FJ+L6Mt5uoedQYpem04aA6kLG09B0KIei2OPu43zW4I=
     settings:
       base:

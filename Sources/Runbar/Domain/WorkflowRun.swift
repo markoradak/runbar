@@ -5,6 +5,12 @@ enum ExecutionProvider: String, CaseIterable, Codable, Hashable, Sendable {
     case vercel
     case cloudflarePages = "cloudflare_pages"
 
+    /// The providers driven by `ExternalProviderMonitor` — everything except
+    /// GitHub Actions, which has its own poller, ETag cache, and scheduler.
+    /// Derived from `allCases` so a new provider is picked up everywhere rather
+    /// than needing each call site found by hand.
+    static let externalProviders: [ExecutionProvider] = allCases.filter { $0 != .githubActions }
+
     var displayName: String {
         switch self {
         case .githubActions: "GitHub Actions"

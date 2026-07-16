@@ -395,7 +395,7 @@ struct SettingsView: View {
 
     private var githubCard: some View {
         SettingsCard(
-            footer: "Runbar uses GitHub's device sign-in and requests read-only access to Actions, Metadata, and Contents. Repository access is granted separately for every personal account or organization — choose All repositories during installation to monitor everything in that account."
+            footer: "Runbar uses GitHub's device sign-in and requests read-only access to Actions, plus the mandatory Metadata. It never requests access to your code, and never writes — it cannot start, cancel, or re-run anything. Repository access is granted separately for every personal account or organization — choose All repositories during installation to monitor everything in that account."
         ) {
             HStack(spacing: 10) {
                 ProviderIconTile(provider: .githubActions, size: 32)

@@ -54,7 +54,7 @@ actor ExternalProviderMonitor: LocalPushPolling {
 
     func configure(tokens: [ExecutionProvider: String]) async {
         self.tokens = tokens.filter { !$0.value.isEmpty }
-        for provider in [ExecutionProvider.vercel, .cloudflarePages] {
+        for provider in ExecutionProvider.externalProviders {
             snapshotValue.connections[provider] = self.tokens[provider] == nil
                 ? .disconnected
                 : .validating
@@ -115,7 +115,7 @@ actor ExternalProviderMonitor: LocalPushPolling {
         snapshotValue.isRefreshing = true
         await emitSnapshot()
 
-        for provider in [ExecutionProvider.vercel, .cloudflarePages] {
+        for provider in ExecutionProvider.externalProviders {
             guard let token = tokens[provider], let client = clients[provider] else { continue }
             // The provider asked us to wait; leave its last state on screen.
             if let until = backoffUntil[provider], now() < until { continue }

@@ -2,27 +2,32 @@ name: Release
 
 # Triggered by scripts/release.sh pushing a v* tag:
 #   build (Release, ad-hoc signed) → zip → generate signed Sparkle appcast →
-#   publish zip + appcast.xml to the public runbar-app/runbar-releases repo.
+#   publish zip + appcast.xml to this repo's GitHub release.
 #
-# Required repository secrets:
+# Required repository secret:
 #   SPARKLE_PRIVATE_KEY  EdDSA private key for appcast signing. Export it with:
 #                        <sparkle-bin>/generate_keys -x /dev/stdout
-#   RELEASES_TOKEN       Fine-grained PAT with contents:write on
-#                        runbar-app/runbar-releases (GITHUB_TOKEN cannot write
-#                        to another repo).
 #
-# Note: builds are ad-hoc signed. For public distribution add a Developer ID
-# Application certificate + notarization in the Build step.
+# Releases publish to this repo, so the built-in GITHUB_TOKEN suffices — no
+# cross-repo PAT. The app's SUFeedURL points at this repo's latest release.
+#
+# ⚠️ Builds are ad-hoc signed, which Gatekeeper rejects on another machine:
+# users get "Runbar is damaged and can't be opened". Before the first public
+# release, add a Developer ID Application certificate and notarization to the
+# Build step. See docs/RELEASING.md.
 
 on:
   push:
     tags: ['v*']
 
+permissions:
+  contents: write
+
 jobs:
   release:
     runs-on: macos-latest
     env:
-      RELEASES_REPO: runbar-app/runbar-releases
+      RELEASES_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
 
@@ -73,13 +78,13 @@ jobs:
             --maximum-versions 1 \
             build/staging
 
-      - name: Publish to releases repo
+      - name: Publish release
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "$TAG" \
             --repo "$RELEASES_REPO" \
             --title "Runbar $VERSION" \
-            --notes "Runbar $VERSION" \
+            --generate-notes \
             "build/staging/Runbar-$VERSION.zip" \
             "build/staging/appcast.xml"

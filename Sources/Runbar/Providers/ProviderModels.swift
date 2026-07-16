@@ -139,10 +139,9 @@ struct ProviderMonitorSnapshot: Equatable, Sendable {
     var isRateLimitDegraded: Bool
 
     static let idle = ProviderMonitorSnapshot(
-        connections: [
-            .vercel: .disconnected,
-            .cloudflarePages: .disconnected
-        ],
+        connections: Dictionary(
+            uniqueKeysWithValues: ExecutionProvider.externalProviders.map { ($0, .disconnected) }
+        ),
         lastSyncAt: nil,
         isRefreshing: false,
         activeExecutionCount: 0,

@@ -3,11 +3,13 @@
 # Release helper — bump the app version, commit, tag, and push. Pushing a
 # `v*` tag is what triggers `.github/workflows/release.yml`:
 #   build (Release) → zip → generate signed Sparkle appcast →
-#   publish to the public `runbar-app/runbar-releases` repo.
+#   publish to this repo's GitHub release.
 #
 # The app's SUFeedURL points at:
-#   https://github.com/runbar-app/runbar-releases/releases/latest/download/appcast.xml
-# so the published appcast is what makes installed apps update.
+#   https://github.com/markoradak/runbar/releases/latest/download/appcast.xml
+# so the published appcast is what makes installed apps update. That URL is
+# baked into every shipped binary — if the repo ever moves, GitHub's redirect
+# must keep serving it, so never recreate a repo at the old path.
 #
 # Usage:
 #   scripts/release.sh patch           # 0.1.0 -> 0.1.1
@@ -140,6 +142,6 @@ echo "  ✓ pushed $BRANCH + $TAG to origin"
 
 echo ""
 echo "Released $TAG. Track the build:"
-echo "  https://github.com/runbar-app/runbar/actions"
+echo "  https://github.com/markoradak/runbar/actions"
 echo "After it finishes, verify the updater feed:"
-echo "  curl -fsSL https://github.com/runbar-app/runbar-releases/releases/latest/download/appcast.xml"
+echo "  curl -fsSL https://github.com/markoradak/runbar/releases/latest/download/appcast.xml"
