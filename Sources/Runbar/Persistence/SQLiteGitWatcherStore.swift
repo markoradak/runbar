@@ -1,18 +1,6 @@
 import Foundation
 import SQLite3
 
-private final class GitWatcherSQLiteConnection: @unchecked Sendable {
-    let handle: OpaquePointer
-
-    init(handle: OpaquePointer) {
-        self.handle = handle
-    }
-
-    deinit {
-        sqlite3_close(handle)
-    }
-}
-
 struct GitWatcherDebugEntry: Equatable, Sendable {
     let repositoryKey: String
     let signal: GitReferenceSignal
@@ -23,25 +11,14 @@ struct GitWatcherDebugEntry: Equatable, Sendable {
     let currentSHA: String?
 }
 
-actor SQLiteGitWatcherStore: GitWatcherRecording {
-    private let connection: GitWatcherSQLiteConnection
-    private var database: OpaquePointer { connection.handle }
-    private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+actor SQLiteGitWatcherStore: GitWatcherRecording, SQLiteBacked {
+    let connection: SQLiteConnection
     private static let maximumEvents = 2_000
 
     init(path: String) throws {
-        var handle: OpaquePointer?
-        let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
-        guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK, let handle else {
-            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "Unknown SQLite open error"
-            if let handle { sqlite3_close(handle) }
-            throw SQLiteStoreError.open(message)
-        }
-
-        do {
-            try Self.execute(
-                database: handle,
-                sql: """
+        connection = try SQLiteSupport.open(
+            path: path,
+            schema: """
                 PRAGMA foreign_keys = ON;
                 PRAGMA journal_mode = WAL;
                 PRAGMA busy_timeout = 5000;
@@ -59,38 +36,25 @@ actor SQLiteGitWatcherStore: GitWatcherRecording {
                 CREATE INDEX IF NOT EXISTS git_watcher_detected_idx
                     ON git_watcher_debug(detected_at DESC);
                 """
-            )
-            if try !Self.hasColumn("current_sha", table: "repos", database: handle) {
-                try Self.execute(database: handle, sql: "ALTER TABLE repos ADD COLUMN current_sha TEXT;")
+        ) { database in
+            if try !Self.hasColumn("current_sha", table: "repos", database: database) {
+                try SQLiteSupport.execute(database: database, sql: "ALTER TABLE repos ADD COLUMN current_sha TEXT;")
             }
             if try !Self.hasColumn(
                 "reference_storage_before",
                 table: "git_watcher_debug",
-                database: handle
+                database: database
             ) {
-                try Self.execute(
-                    database: handle,
+                try SQLiteSupport.execute(
+                    database: database,
                     sql: "ALTER TABLE git_watcher_debug ADD COLUMN reference_storage_before TEXT NOT NULL DEFAULT 'none';"
                 )
             }
-        } catch {
-            sqlite3_close(handle)
-            throw error
         }
-        connection = GitWatcherSQLiteConnection(handle: handle)
     }
 
     static func production() throws -> SQLiteGitWatcherStore {
-        let fileManager = FileManager.default
-        let applicationSupport = try fileManager.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        let directory = applicationSupport.appendingPathComponent("Runbar", isDirectory: true)
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        return try SQLiteGitWatcherStore(path: directory.appendingPathComponent("runbar.sqlite3").path)
+        try SQLiteGitWatcherStore(path: try SQLiteSupport.productionDatabasePath())
     }
 
     func updateCurrentSHA(_ sha: String?, repositoryKey: String) async throws {
@@ -192,57 +156,5 @@ actor SQLiteGitWatcherStore: GitWatcherRecording {
             if String(cString: pointer) == column { return true }
         }
         return false
-    }
-
-    private func execute(_ sql: String) throws {
-        try Self.execute(database: database, sql: sql)
-    }
-
-    private static func execute(database: OpaquePointer, sql: String) throws {
-        var errorMessage: UnsafeMutablePointer<CChar>?
-        guard sqlite3_exec(database, sql, nil, nil, &errorMessage) == SQLITE_OK else {
-            let message = errorMessage.map { String(cString: $0) }
-                ?? String(cString: sqlite3_errmsg(database))
-            sqlite3_free(errorMessage)
-            throw SQLiteStoreError.statement(message)
-        }
-    }
-
-    private func prepare(_ sql: String) throws -> OpaquePointer {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
-            throw SQLiteStoreError.statement(String(cString: sqlite3_errmsg(database)))
-        }
-        return statement
-    }
-
-    private func stepDone(_ statement: OpaquePointer) throws {
-        guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw SQLiteStoreError.step(String(cString: sqlite3_errmsg(database)))
-        }
-    }
-
-    private func bind(_ value: String, to statement: OpaquePointer, index: Int32) {
-        sqlite3_bind_text(statement, index, value, -1, Self.transient)
-    }
-
-    private func bindOptional(_ value: String?, to statement: OpaquePointer, index: Int32) {
-        if let value { bind(value, to: statement, index: index) }
-        else { sqlite3_bind_null(statement, index) }
-    }
-
-    private func bindOptional(_ value: Double?, to statement: OpaquePointer, index: Int32) {
-        if let value { sqlite3_bind_double(statement, index, value) }
-        else { sqlite3_bind_null(statement, index) }
-    }
-
-    private func bindOptional(_ value: Int?, to statement: OpaquePointer, index: Int32) {
-        if let value { sqlite3_bind_int(statement, index, Int32(value)) }
-        else { sqlite3_bind_null(statement, index) }
-    }
-
-    private func text(_ statement: OpaquePointer, column: Int32) -> String? {
-        guard let pointer = sqlite3_column_text(statement, column) else { return nil }
-        return String(cString: pointer)
     }
 }

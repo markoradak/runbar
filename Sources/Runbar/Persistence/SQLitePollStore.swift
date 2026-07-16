@@ -1,37 +1,14 @@
 import Foundation
 import SQLite3
 
-private final class PollSQLiteConnection: @unchecked Sendable {
-    let handle: OpaquePointer
-
-    init(handle: OpaquePointer) {
-        self.handle = handle
-    }
-
-    deinit {
-        sqlite3_close(handle)
-    }
-}
-
-actor SQLitePollStore: WorkflowRunStoring, PollSchedulerRecording {
-    private let connection: PollSQLiteConnection
-    private var database: OpaquePointer { connection.handle }
-    private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+actor SQLitePollStore: WorkflowRunStoring, PollSchedulerRecording, SQLiteBacked {
+    let connection: SQLiteConnection
     private static let maximumSchedulerEvents = 20_000
 
     init(path: String) throws {
-        var handle: OpaquePointer?
-        let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
-        guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK, let handle else {
-            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "Unknown SQLite open error"
-            if let handle { sqlite3_close(handle) }
-            throw SQLiteStoreError.open(message)
-        }
-
-        do {
-            try Self.execute(
-                database: handle,
-                sql: """
+        connection = try SQLiteSupport.open(
+            path: path,
+            schema: """
                 PRAGMA foreign_keys = ON;
                 PRAGMA journal_mode = WAL;
                 PRAGMA busy_timeout = 5000;
@@ -92,16 +69,11 @@ actor SQLitePollStore: WorkflowRunStoring, PollSchedulerRecording {
                 CREATE INDEX IF NOT EXISTS scheduler_poll_session_idx
                     ON scheduler_poll_debug(session_id, id);
                 """
-            )
-        } catch {
-            sqlite3_close(handle)
-            throw error
-        }
-        connection = PollSQLiteConnection(handle: handle)
+        )
     }
 
     static func production() throws -> SQLitePollStore {
-        try SQLitePollStore(path: try productionDatabasePath())
+        try SQLitePollStore(path: try SQLiteSupport.productionDatabasePath())
     }
 
     func saveWorkflowRuns(_ runs: [WorkflowRun], for repositoryKey: String) async throws {
@@ -272,70 +244,4 @@ actor SQLitePollStore: WorkflowRunStoring, PollSchedulerRecording {
         try stepDone(statement)
     }
 
-    private static func productionDatabasePath() throws -> String {
-        let fileManager = FileManager.default
-        let applicationSupport = try fileManager.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        let directory = applicationSupport.appendingPathComponent("Runbar", isDirectory: true)
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory.appendingPathComponent("runbar.sqlite3").path
-    }
-
-    private func execute(_ sql: String) throws {
-        try Self.execute(database: database, sql: sql)
-    }
-
-    private static func execute(database: OpaquePointer, sql: String) throws {
-        var errorMessage: UnsafeMutablePointer<CChar>?
-        guard sqlite3_exec(database, sql, nil, nil, &errorMessage) == SQLITE_OK else {
-            let message = errorMessage.map { String(cString: $0) }
-                ?? String(cString: sqlite3_errmsg(database))
-            sqlite3_free(errorMessage)
-            throw SQLiteStoreError.statement(message)
-        }
-    }
-
-    private func prepare(_ sql: String) throws -> OpaquePointer {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement
-        else {
-            throw SQLiteStoreError.statement(String(cString: sqlite3_errmsg(database)))
-        }
-        return statement
-    }
-
-    private func stepDone(_ statement: OpaquePointer) throws {
-        guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw SQLiteStoreError.step(String(cString: sqlite3_errmsg(database)))
-        }
-    }
-
-    private func bind(_ value: String, to statement: OpaquePointer, index: Int32) {
-        sqlite3_bind_text(statement, index, value, -1, Self.transient)
-    }
-
-    private func bindOptional(_ value: String?, to statement: OpaquePointer, index: Int32) {
-        if let value { bind(value, to: statement, index: index) }
-        else { sqlite3_bind_null(statement, index) }
-    }
-
-    private func bindOptional(_ value: Int?, to statement: OpaquePointer, index: Int32) {
-        if let value { sqlite3_bind_int(statement, index, Int32(value)) }
-        else { sqlite3_bind_null(statement, index) }
-    }
-
-    private func bindOptional(_ value: Int64?, to statement: OpaquePointer, index: Int32) {
-        if let value { sqlite3_bind_int64(statement, index, value) }
-        else { sqlite3_bind_null(statement, index) }
-    }
-
-    private func bindOptional(_ value: TimeInterval?, to statement: OpaquePointer, index: Int32) {
-        if let value { sqlite3_bind_double(statement, index, value) }
-        else { sqlite3_bind_null(statement, index) }
-    }
 }

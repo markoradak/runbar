@@ -1,43 +1,23 @@
 import Foundation
 import SQLite3
 
-private final class ProviderSQLiteConnection: @unchecked Sendable {
-    let handle: OpaquePointer
-    init(handle: OpaquePointer) { self.handle = handle }
-    deinit { sqlite3_close(handle) }
-}
-
-actor SQLiteProviderStore: ProviderExecutionStoring {
-    private let connection: ProviderSQLiteConnection
-    private var database: OpaquePointer { connection.handle }
-    private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+actor SQLiteProviderStore: ProviderExecutionStoring, SQLiteBacked {
+    let connection: SQLiteConnection
 
     init(path: String) throws {
-        var handle: OpaquePointer?
-        let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
-        guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK, let handle else {
-            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "Unknown SQLite open error"
-            if let handle { sqlite3_close(handle) }
-            throw SQLiteStoreError.open(message)
+        connection = try SQLiteSupport.open(path: path, schema: Self.schema) { database in
+            Self.migrateAddingColumn(database: database, sql: "ALTER TABLE provider_runs ADD COLUMN preview_url TEXT")
         }
-        do {
-            try Self.execute(database: handle, sql: Self.schema)
-            Self.migrateAddingColumn(database: handle, sql: "ALTER TABLE provider_runs ADD COLUMN preview_url TEXT")
-        } catch {
-            sqlite3_close(handle)
-            throw error
-        }
-        connection = ProviderSQLiteConnection(handle: handle)
     }
 
     /// Additive column migration — a duplicate-column failure means the
     /// column already exists (fresh schema or a previous run), which is fine.
     private static func migrateAddingColumn(database: OpaquePointer, sql: String) {
-        try? execute(database: database, sql: sql)
+        try? SQLiteSupport.execute(database: database, sql: sql)
     }
 
     static func production() throws -> SQLiteProviderStore {
-        try SQLiteProviderStore(path: try productionDatabasePath())
+        try SQLiteProviderStore(path: try SQLiteSupport.productionDatabasePath())
     }
 
     func saveProviderExecutions(
@@ -160,57 +140,4 @@ actor SQLiteProviderStore: ProviderExecutionStoring {
         CREATE INDEX IF NOT EXISTS provider_runs_workflow_completed_idx
             ON provider_runs(provider, workflow_id, status, updated_at DESC);
         """
-
-    private static func productionDatabasePath() throws -> String {
-        let fileManager = FileManager.default
-        let applicationSupport = try fileManager.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        let directory = applicationSupport.appendingPathComponent("Runbar", isDirectory: true)
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory.appendingPathComponent("runbar.sqlite3").path
-    }
-
-    private func execute(_ sql: String) throws { try Self.execute(database: database, sql: sql) }
-
-    private static func execute(database: OpaquePointer, sql: String) throws {
-        var errorMessage: UnsafeMutablePointer<CChar>?
-        guard sqlite3_exec(database, sql, nil, nil, &errorMessage) == SQLITE_OK else {
-            let message = errorMessage.map { String(cString: $0) }
-                ?? String(cString: sqlite3_errmsg(database))
-            sqlite3_free(errorMessage)
-            throw SQLiteStoreError.statement(message)
-        }
-    }
-
-    private func prepare(_ sql: String) throws -> OpaquePointer {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement
-        else { throw SQLiteStoreError.statement(String(cString: sqlite3_errmsg(database))) }
-        return statement
-    }
-
-    private func stepDone(_ statement: OpaquePointer) throws {
-        guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw SQLiteStoreError.step(String(cString: sqlite3_errmsg(database)))
-        }
-    }
-
-    private func bind(_ value: String, to statement: OpaquePointer, index: Int32) {
-        sqlite3_bind_text(statement, index, value, -1, Self.transient)
-    }
-
-    private func bindOptional(_ value: String?, to statement: OpaquePointer, index: Int32) {
-        if let value { bind(value, to: statement, index: index) }
-        else { sqlite3_bind_null(statement, index) }
-    }
-
-    private func bindOptional(_ value: TimeInterval?, to statement: OpaquePointer, index: Int32) {
-        if let value { sqlite3_bind_double(statement, index, value) }
-        else { sqlite3_bind_null(statement, index) }
-    }
 }

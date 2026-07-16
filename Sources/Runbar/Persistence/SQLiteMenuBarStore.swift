@@ -1,37 +1,14 @@
 import Foundation
 import SQLite3
 
-private final class MenuBarSQLiteConnection: @unchecked Sendable {
-    let handle: OpaquePointer
-
-    init(handle: OpaquePointer) {
-        self.handle = handle
-    }
-
-    deinit {
-        sqlite3_close(handle)
-    }
-}
-
-actor SQLiteMenuBarStore: MenuBarDataStoring {
-    private let connection: MenuBarSQLiteConnection
-    private var database: OpaquePointer { connection.handle }
-    private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+actor SQLiteMenuBarStore: MenuBarDataStoring, SQLiteBacked {
+    let connection: SQLiteConnection
     private static let maximumTimerTicks = 3_600
 
     init(path: String) throws {
-        var handle: OpaquePointer?
-        let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
-        guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK, let handle else {
-            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "Unknown SQLite open error"
-            if let handle { sqlite3_close(handle) }
-            throw SQLiteStoreError.open(message)
-        }
-
-        do {
-            try Self.execute(
-                database: handle,
-                sql: """
+        connection = try SQLiteSupport.open(
+            path: path,
+            schema: """
                 PRAGMA foreign_keys = ON;
                 PRAGMA journal_mode = WAL;
                 PRAGMA busy_timeout = 5000;
@@ -47,25 +24,11 @@ actor SQLiteMenuBarStore: MenuBarDataStoring {
                     ON menu_timer_debug(timestamp DESC);
                 \(SQLiteProviderStore.schema)
                 """
-            )
-        } catch {
-            sqlite3_close(handle)
-            throw error
-        }
-        connection = MenuBarSQLiteConnection(handle: handle)
+        )
     }
 
     static func production() throws -> SQLiteMenuBarStore {
-        let fileManager = FileManager.default
-        let applicationSupport = try fileManager.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        let directory = applicationSupport.appendingPathComponent("Runbar", isDirectory: true)
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        return try SQLiteMenuBarStore(path: directory.appendingPathComponent("runbar.sqlite3").path)
+        try SQLiteMenuBarStore(path: try SQLiteSupport.productionDatabasePath())
     }
 
     func loadMenuBarRuns(recentLimit: Int = 20) async throws -> MenuBarRunSnapshot {
@@ -358,58 +321,5 @@ actor SQLiteMenuBarStore: MenuBarDataStoring {
             return (durations[middle - 1] + durations[middle]) / 2
         }
         return durations[middle]
-    }
-
-    private func date(_ statement: OpaquePointer, column: Int32) -> Date? {
-        guard sqlite3_column_type(statement, column) != SQLITE_NULL else { return nil }
-        return Date(timeIntervalSince1970: sqlite3_column_double(statement, column))
-    }
-
-    private func tableExists(_ tableName: String) throws -> Bool {
-        let statement = try prepare(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1"
-        )
-        defer { sqlite3_finalize(statement) }
-        bind(tableName, to: statement, index: 1)
-        return sqlite3_step(statement) == SQLITE_ROW
-    }
-
-    private func execute(_ sql: String) throws {
-        try Self.execute(database: database, sql: sql)
-    }
-
-    private static func execute(database: OpaquePointer, sql: String) throws {
-        var errorMessage: UnsafeMutablePointer<CChar>?
-        guard sqlite3_exec(database, sql, nil, nil, &errorMessage) == SQLITE_OK else {
-            let message = errorMessage.map { String(cString: $0) }
-                ?? String(cString: sqlite3_errmsg(database))
-            sqlite3_free(errorMessage)
-            throw SQLiteStoreError.statement(message)
-        }
-    }
-
-    private func prepare(_ sql: String) throws -> OpaquePointer {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
-              let statement
-        else {
-            throw SQLiteStoreError.statement(String(cString: sqlite3_errmsg(database)))
-        }
-        return statement
-    }
-
-    private func stepDone(_ statement: OpaquePointer) throws {
-        guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw SQLiteStoreError.step(String(cString: sqlite3_errmsg(database)))
-        }
-    }
-
-    private func bind(_ value: String, to statement: OpaquePointer, index: Int32) {
-        sqlite3_bind_text(statement, index, value, -1, Self.transient)
-    }
-
-    private func text(_ statement: OpaquePointer, column: Int32) -> String? {
-        guard let pointer = sqlite3_column_text(statement, column) else { return nil }
-        return String(cString: pointer)
     }
 }

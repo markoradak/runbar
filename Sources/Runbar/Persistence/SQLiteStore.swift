@@ -13,35 +13,13 @@ enum SQLiteStoreError: Error, CustomStringConvertible {
     }
 }
 
-private final class SQLiteConnection: @unchecked Sendable {
-    let handle: OpaquePointer
-
-    init(handle: OpaquePointer) {
-        self.handle = handle
-    }
-
-    deinit {
-        sqlite3_close(handle)
-    }
-}
-
-actor SQLiteStore: RepoDiscoveryStoring {
-    private let connection: SQLiteConnection
-    private var database: OpaquePointer { connection.handle }
-    private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+actor SQLiteStore: RepoDiscoveryStoring, SQLiteBacked {
+    let connection: SQLiteConnection
 
     init(path: String) throws {
-        var connection: OpaquePointer?
-        let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
-        guard sqlite3_open_v2(path, &connection, flags, nil) == SQLITE_OK, let connection else {
-            let message = connection.map { String(cString: sqlite3_errmsg($0)) } ?? "Unknown SQLite open error"
-            if let connection { sqlite3_close(connection) }
-            throw SQLiteStoreError.open(message)
-        }
-        do {
-            try Self.execute(
-                database: connection,
-                sql: """
+        connection = try SQLiteSupport.open(
+            path: path,
+            schema: """
                 PRAGMA foreign_keys = ON;
                 PRAGMA journal_mode = WAL;
                 PRAGMA busy_timeout = 5000;
@@ -78,25 +56,11 @@ actor SQLiteStore: RepoDiscoveryStoring {
                     PRIMARY KEY (relative_path, reason)
                 );
                 """
-            )
-        } catch {
-            sqlite3_close(connection)
-            throw error
-        }
-        self.connection = SQLiteConnection(handle: connection)
+        )
     }
 
     static func production() throws -> SQLiteStore {
-        let fileManager = FileManager.default
-        let applicationSupport = try fileManager.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        let directory = applicationSupport.appendingPathComponent("Runbar", isDirectory: true)
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        return try SQLiteStore(path: directory.appendingPathComponent("runbar.sqlite3").path)
+        try SQLiteStore(path: try SQLiteSupport.productionDatabasePath())
     }
 
     func codeRootPath() async throws -> String? {
@@ -278,46 +242,5 @@ actor SQLiteStore: RepoDiscoveryStoring {
         bind(skipped.relativePath, to: statement, index: 1)
         bind(skipped.reason.rawValue, to: statement, index: 2)
         try stepDone(statement)
-    }
-
-    private func execute(_ sql: String) throws {
-        try Self.execute(database: database, sql: sql)
-    }
-
-    private static func execute(database: OpaquePointer, sql: String) throws {
-        var errorMessage: UnsafeMutablePointer<CChar>?
-        guard sqlite3_exec(database, sql, nil, nil, &errorMessage) == SQLITE_OK else {
-            let message = errorMessage.map { String(cString: $0) } ?? String(cString: sqlite3_errmsg(database))
-            sqlite3_free(errorMessage)
-            throw SQLiteStoreError.statement(message)
-        }
-    }
-
-    private func prepare(_ sql: String) throws -> OpaquePointer {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
-            throw SQLiteStoreError.statement(String(cString: sqlite3_errmsg(database)))
-        }
-        return statement
-    }
-
-    private func stepDone(_ statement: OpaquePointer) throws {
-        guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw SQLiteStoreError.step(String(cString: sqlite3_errmsg(database)))
-        }
-    }
-
-    private func bind(_ value: String, to statement: OpaquePointer, index: Int32) {
-        sqlite3_bind_text(statement, index, value, -1, Self.transient)
-    }
-
-    private func bindOptional(_ value: String?, to statement: OpaquePointer, index: Int32) {
-        if let value { bind(value, to: statement, index: index) }
-        else { sqlite3_bind_null(statement, index) }
-    }
-
-    private func text(_ statement: OpaquePointer, column: Int32) -> String? {
-        guard let pointer = sqlite3_column_text(statement, column) else { return nil }
-        return String(cString: pointer)
     }
 }
