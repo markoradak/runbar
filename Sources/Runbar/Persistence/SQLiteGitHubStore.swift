@@ -6,35 +6,7 @@ actor SQLiteGitHubStore: GitHubClientStoring, SQLiteBacked {
     private static let maximumDebugEntries = 100
 
     init(path: String) throws {
-        connection = try SQLiteSupport.open(
-            path: path,
-            schema: """
-                PRAGMA foreign_keys = ON;
-                PRAGMA journal_mode = WAL;
-                PRAGMA busy_timeout = 5000;
-                CREATE TABLE IF NOT EXISTS etags (
-                    canonical_url TEXT PRIMARY KEY NOT NULL,
-                    etag TEXT NOT NULL,
-                    body BLOB NOT NULL,
-                    updated_at REAL NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS github_request_debug (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp REAL NOT NULL,
-                    sanitized_url TEXT NOT NULL,
-                    status_code INTEGER,
-                    cache_outcome TEXT NOT NULL,
-                    rate_limit_remaining INTEGER,
-                    rate_limit_reset REAL,
-                    error_category TEXT
-                );
-                CREATE TABLE IF NOT EXISTS repo_preferences (
-                    repo_key TEXT PRIMARY KEY NOT NULL,
-                    excluded INTEGER NOT NULL DEFAULT 0,
-                    accessible INTEGER NOT NULL DEFAULT 1
-                );
-                """
-        )
+        connection = try SQLiteSupport.open(path: path)
     }
 
     static func production() throws -> SQLiteGitHubStore {
@@ -115,12 +87,10 @@ actor SQLiteGitHubStore: GitHubClientStoring, SQLiteBacked {
         bind(repositoryKey, to: statement, index: 1)
         try stepDone(statement)
 
-        if try tableExists("repos") {
-            let repository = try prepare("UPDATE repos SET accessible = 0 WHERE repo_key = ?")
-            defer { sqlite3_finalize(repository) }
-            bind(repositoryKey, to: repository, index: 1)
-            try stepDone(repository)
-        }
+        let repository = try prepare("UPDATE repos SET accessible = 0 WHERE repo_key = ?")
+        defer { sqlite3_finalize(repository) }
+        bind(repositoryKey, to: repository, index: 1)
+        try stepDone(repository)
         return true
     }
 
@@ -136,13 +106,11 @@ actor SQLiteGitHubStore: GitHubClientStoring, SQLiteBacked {
         sqlite3_bind_int(statement, 2, isAccessible ? 1 : 0)
         try stepDone(statement)
 
-        if try tableExists("repos") {
-            let repository = try prepare("UPDATE repos SET accessible = ? WHERE repo_key = ?")
-            defer { sqlite3_finalize(repository) }
-            sqlite3_bind_int(repository, 1, isAccessible ? 1 : 0)
-            bind(repositoryKey, to: repository, index: 2)
-            try stepDone(repository)
-        }
+        let repository = try prepare("UPDATE repos SET accessible = ? WHERE repo_key = ?")
+        defer { sqlite3_finalize(repository) }
+        sqlite3_bind_int(repository, 1, isAccessible ? 1 : 0)
+        bind(repositoryKey, to: repository, index: 2)
+        try stepDone(repository)
     }
 
     func appendDebugEntry(_ entry: GitHubDebugEntry) async throws {

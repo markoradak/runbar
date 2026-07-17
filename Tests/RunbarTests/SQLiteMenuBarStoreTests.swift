@@ -68,7 +68,6 @@ final class SQLiteMenuBarStoreTests: XCTestCase {
 
         let repositoryStore = try SQLiteStore(path: databaseURL.path)
         let pollStore = try SQLitePollStore(path: databaseURL.path)
-        _ = try SQLiteGitWatcherStore(path: databaseURL.path)
         let menuStore = try SQLiteMenuBarStore(path: databaseURL.path)
         let repository = repository(owner: "median", name: "fixture")
         try await repositoryStore.saveDiscoverySnapshot(

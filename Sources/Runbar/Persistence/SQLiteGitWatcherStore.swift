@@ -16,41 +16,7 @@ actor SQLiteGitWatcherStore: GitWatcherRecording, SQLiteBacked {
     private static let maximumEvents = 2_000
 
     init(path: String) throws {
-        connection = try SQLiteSupport.open(
-            path: path,
-            schema: """
-                PRAGMA foreign_keys = ON;
-                PRAGMA journal_mode = WAL;
-                PRAGMA busy_timeout = 5000;
-                CREATE TABLE IF NOT EXISTS git_watcher_debug (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    repo_key TEXT NOT NULL,
-                    signal TEXT NOT NULL,
-                    reference_storage_before TEXT NOT NULL DEFAULT 'none',
-                    detected_at REAL NOT NULL,
-                    poll_started_at REAL,
-                    latency_ms INTEGER,
-                    current_sha TEXT,
-                    FOREIGN KEY (repo_key) REFERENCES repos(repo_key) ON DELETE CASCADE
-                );
-                CREATE INDEX IF NOT EXISTS git_watcher_detected_idx
-                    ON git_watcher_debug(detected_at DESC);
-                """
-        ) { database in
-            if try !Self.hasColumn("current_sha", table: "repos", database: database) {
-                try SQLiteSupport.execute(database: database, sql: "ALTER TABLE repos ADD COLUMN current_sha TEXT;")
-            }
-            if try !Self.hasColumn(
-                "reference_storage_before",
-                table: "git_watcher_debug",
-                database: database
-            ) {
-                try SQLiteSupport.execute(
-                    database: database,
-                    sql: "ALTER TABLE git_watcher_debug ADD COLUMN reference_storage_before TEXT NOT NULL DEFAULT 'none';"
-                )
-            }
-        }
+        connection = try SQLiteSupport.open(path: path)
     }
 
     static func production() throws -> SQLiteGitWatcherStore {
@@ -143,18 +109,5 @@ actor SQLiteGitWatcherStore: GitWatcherRecording, SQLiteBacked {
             )
         }
         return entries
-    }
-
-    private static func hasColumn(_ column: String, table: String, database: OpaquePointer) throws -> Bool {
-        var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(database, "PRAGMA table_info(\(table))", -1, &statement, nil) == SQLITE_OK,
-              let statement
-        else { throw SQLiteStoreError.statement(String(cString: sqlite3_errmsg(database))) }
-        defer { sqlite3_finalize(statement) }
-        while sqlite3_step(statement) == SQLITE_ROW {
-            guard let pointer = sqlite3_column_text(statement, 1) else { continue }
-            if String(cString: pointer) == column { return true }
-        }
-        return false
     }
 }

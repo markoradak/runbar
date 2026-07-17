@@ -6,25 +6,7 @@ actor SQLiteMenuBarStore: MenuBarDataStoring, SQLiteBacked {
     private static let maximumTimerTicks = 3_600
 
     init(path: String) throws {
-        connection = try SQLiteSupport.open(
-            path: path,
-            schema: """
-                PRAGMA foreign_keys = ON;
-                PRAGMA journal_mode = WAL;
-                PRAGMA busy_timeout = 5000;
-                CREATE TABLE IF NOT EXISTS menu_timer_debug (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp REAL NOT NULL,
-                    run_id INTEGER NOT NULL,
-                    elapsed_seconds INTEGER NOT NULL,
-                    source TEXT NOT NULL,
-                    FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
-                );
-                CREATE INDEX IF NOT EXISTS menu_timer_timestamp_idx
-                    ON menu_timer_debug(timestamp DESC);
-                \(SQLiteProviderStore.schema)
-                """
-        )
+        connection = try SQLiteSupport.open(path: path)
     }
 
     static func production() throws -> SQLiteMenuBarStore {
@@ -32,21 +14,16 @@ actor SQLiteMenuBarStore: MenuBarDataStoring, SQLiteBacked {
     }
 
     func loadMenuBarRuns(recentLimit: Int = 20) async throws -> MenuBarRunSnapshot {
-        let hasGitHubRunStorage = try tableExists("runs")
-        let githubRunning = hasGitHubRunStorage
-            ? try loadRuns(
-                whereClause: "r.status IN ('queued', 'in_progress')",
-                orderClause: "COALESCE(r.run_started_at, r.created_at) DESC, r.id DESC",
-                limit: nil
-            )
-            : []
-        let githubRecent = hasGitHubRunStorage
-            ? try loadRuns(
-                whereClause: "r.status = 'completed'",
-                orderClause: "r.created_at DESC, r.id DESC",
-                limit: max(0, recentLimit)
-            )
-            : []
+        let githubRunning = try loadRuns(
+            whereClause: "r.status IN ('queued', 'in_progress')",
+            orderClause: "COALESCE(r.run_started_at, r.created_at) DESC, r.id DESC",
+            limit: nil
+        )
+        let githubRecent = try loadRuns(
+            whereClause: "r.status = 'completed'",
+            orderClause: "r.created_at DESC, r.id DESC",
+            limit: max(0, recentLimit)
+        )
         let providerRunning = try loadProviderRuns(active: true, limit: nil)
         let providerRecent = try loadProviderRuns(active: false, limit: max(0, recentLimit))
         let running = (githubRunning + providerRunning).sorted {

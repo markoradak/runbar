@@ -6,70 +6,7 @@ actor SQLitePollStore: WorkflowRunStoring, PollSchedulerRecording, SQLiteBacked 
     private static let maximumSchedulerEvents = 20_000
 
     init(path: String) throws {
-        connection = try SQLiteSupport.open(
-            path: path,
-            schema: """
-                PRAGMA foreign_keys = ON;
-                PRAGMA journal_mode = WAL;
-                PRAGMA busy_timeout = 5000;
-                CREATE TABLE IF NOT EXISTS runs (
-                    id INTEGER PRIMARY KEY NOT NULL,
-                    repo_key TEXT NOT NULL,
-                    workflow_id INTEGER NOT NULL,
-                    workflow_name TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    conclusion TEXT,
-                    run_started_at REAL,
-                    created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL,
-                    head_branch TEXT,
-                    head_sha TEXT NOT NULL,
-                    event TEXT NOT NULL,
-                    display_title TEXT NOT NULL,
-                    html_url TEXT NOT NULL,
-                    run_attempt INTEGER NOT NULL,
-                    actor_login TEXT,
-                    triggering_actor_login TEXT,
-                    FOREIGN KEY (repo_key) REFERENCES repos(repo_key) ON DELETE CASCADE
-                );
-                CREATE INDEX IF NOT EXISTS runs_repo_updated_idx
-                    ON runs(repo_key, updated_at DESC);
-                CREATE INDEX IF NOT EXISTS runs_workflow_completed_idx
-                    ON runs(workflow_id, status, updated_at DESC);
-                CREATE TABLE IF NOT EXISTS scheduler_sessions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    started_at REAL NOT NULL,
-                    ended_at REAL,
-                    repository_count INTEGER NOT NULL,
-                    total_poll_attempts INTEGER NOT NULL DEFAULT 0,
-                    quota_consuming_requests INTEGER NOT NULL DEFAULT 0,
-                    observed_active_run INTEGER NOT NULL DEFAULT 0,
-                    latest_rate_limit_remaining INTEGER,
-                    latest_rate_limit_reset REAL
-                );
-                CREATE TABLE IF NOT EXISTS scheduler_poll_debug (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id INTEGER,
-                    timestamp REAL NOT NULL,
-                    repo_key TEXT NOT NULL,
-                    trigger TEXT NOT NULL,
-                    tier_before TEXT NOT NULL,
-                    tier_after TEXT NOT NULL,
-                    scheduled_interval REAL NOT NULL,
-                    jitter_factor REAL NOT NULL,
-                    status_code INTEGER,
-                    cache_outcome TEXT NOT NULL,
-                    rate_limit_remaining INTEGER,
-                    rate_limit_reset REAL,
-                    had_active_run INTEGER NOT NULL,
-                    rate_limit_degraded INTEGER NOT NULL,
-                    error_category TEXT,
-                    FOREIGN KEY (session_id) REFERENCES scheduler_sessions(id) ON DELETE CASCADE
-                );
-                CREATE INDEX IF NOT EXISTS scheduler_poll_session_idx
-                    ON scheduler_poll_debug(session_id, id);
-                """
-        )
+        connection = try SQLiteSupport.open(path: path)
     }
 
     static func production() throws -> SQLitePollStore {

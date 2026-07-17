@@ -17,46 +17,7 @@ actor SQLiteStore: RepoDiscoveryStoring, SQLiteBacked {
     let connection: SQLiteConnection
 
     init(path: String) throws {
-        connection = try SQLiteSupport.open(
-            path: path,
-            schema: """
-                PRAGMA foreign_keys = ON;
-                PRAGMA journal_mode = WAL;
-                PRAGMA busy_timeout = 5000;
-                CREATE TABLE IF NOT EXISTS settings (
-                    key TEXT PRIMARY KEY NOT NULL,
-                    value TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS repo_preferences (
-                    repo_key TEXT PRIMARY KEY NOT NULL,
-                    excluded INTEGER NOT NULL DEFAULT 0,
-                    accessible INTEGER NOT NULL DEFAULT 1
-                );
-                CREATE TABLE IF NOT EXISTS repos (
-                    repo_key TEXT PRIMARY KEY NOT NULL,
-                    owner TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    local_path TEXT,
-                    pushed_at REAL,
-                    excluded INTEGER NOT NULL,
-                    accessible INTEGER NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS workflows (
-                    repo_key TEXT NOT NULL,
-                    file_name TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    events_json TEXT NOT NULL,
-                    PRIMARY KEY (repo_key, file_name),
-                    FOREIGN KEY (repo_key) REFERENCES repos(repo_key) ON DELETE CASCADE
-                );
-                CREATE TABLE IF NOT EXISTS scan_skips (
-                    relative_path TEXT NOT NULL,
-                    reason TEXT NOT NULL,
-                    PRIMARY KEY (relative_path, reason)
-                );
-                """
-        )
+        connection = try SQLiteSupport.open(path: path)
     }
 
     static func production() throws -> SQLiteStore {

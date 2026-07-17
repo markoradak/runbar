@@ -67,8 +67,6 @@ final class ProviderPersistenceTests: XCTestCase {
     func testDisconnectDeletesOnlySelectedProviderHistory() async throws {
         let databaseURL = temporaryDatabaseURL()
         defer { try? FileManager.default.removeItem(at: databaseURL.deletingLastPathComponent()) }
-        _ = try SQLiteStore(path: databaseURL.path)
-        _ = try SQLiteGitWatcherStore(path: databaseURL.path)
         let providerStore = try SQLiteProviderStore(path: databaseURL.path)
         let menuStore = try SQLiteMenuBarStore(path: databaseURL.path)
         let now = Date()

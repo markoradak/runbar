@@ -5,15 +5,7 @@ actor SQLiteProviderStore: ProviderExecutionStoring, SQLiteBacked {
     let connection: SQLiteConnection
 
     init(path: String) throws {
-        connection = try SQLiteSupport.open(path: path, schema: Self.schema) { database in
-            Self.migrateAddingColumn(database: database, sql: "ALTER TABLE provider_runs ADD COLUMN preview_url TEXT")
-        }
-    }
-
-    /// Additive column migration — a duplicate-column failure means the
-    /// column already exists (fresh schema or a previous run), which is fine.
-    private static func migrateAddingColumn(database: OpaquePointer, sql: String) {
-        try? SQLiteSupport.execute(database: database, sql: sql)
+        connection = try SQLiteSupport.open(path: path)
     }
 
     static func production() throws -> SQLiteProviderStore {
@@ -106,38 +98,4 @@ actor SQLiteProviderStore: ProviderExecutionStoring, SQLiteBacked {
         bindOptional(item.previewURL, to: statement, index: 20)
         try stepDone(statement)
     }
-
-    static let schema = """
-        PRAGMA journal_mode = WAL;
-        PRAGMA busy_timeout = 5000;
-        CREATE TABLE IF NOT EXISTS provider_runs (
-            synthetic_id INTEGER NOT NULL,
-            provider TEXT NOT NULL,
-            external_id TEXT NOT NULL,
-            repo_key TEXT NOT NULL,
-            owner TEXT NOT NULL,
-            repo_name TEXT NOT NULL,
-            workflow_id INTEGER NOT NULL,
-            project_key TEXT NOT NULL,
-            project_name TEXT NOT NULL,
-            status TEXT NOT NULL,
-            conclusion TEXT,
-            run_started_at REAL,
-            created_at REAL NOT NULL,
-            updated_at REAL NOT NULL,
-            head_branch TEXT,
-            head_sha TEXT NOT NULL,
-            environment TEXT NOT NULL,
-            display_title TEXT NOT NULL,
-            web_url TEXT NOT NULL,
-            preview_url TEXT,
-            PRIMARY KEY(provider, external_id)
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS provider_runs_synthetic_id_idx
-            ON provider_runs(synthetic_id);
-        CREATE INDEX IF NOT EXISTS provider_runs_status_updated_idx
-            ON provider_runs(status, updated_at DESC);
-        CREATE INDEX IF NOT EXISTS provider_runs_workflow_completed_idx
-            ON provider_runs(provider, workflow_id, status, updated_at DESC);
-        """
 }

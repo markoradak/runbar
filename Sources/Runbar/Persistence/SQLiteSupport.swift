@@ -23,13 +23,11 @@ enum SQLiteSupport {
     /// retain the caller's pointer.
     static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-    /// Opens `path`, runs `schema`, then any `migrate` work, closing the handle
-    /// again if either fails — so a half-initialised store never escapes.
-    static func open(
-        path: String,
-        schema: String,
-        migrate: (OpaquePointer) throws -> Void = { _ in }
-    ) throws -> SQLiteConnection {
+    /// Opens `path` and applies the full canonical schema (`SQLiteSchema`),
+    /// closing the handle again if that fails — so a half-initialised store never
+    /// escapes. Every store opens the same way, so schema creation no longer
+    /// depends on which store opens first.
+    static func open(path: String) throws -> SQLiteConnection {
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
         guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK, let handle else {
@@ -38,8 +36,7 @@ enum SQLiteSupport {
             throw SQLiteStoreError.open(message)
         }
         do {
-            try execute(database: handle, sql: schema)
-            try migrate(handle)
+            try SQLiteSchema.migrate(handle)
         } catch {
             sqlite3_close(handle)
             throw error
@@ -98,14 +95,6 @@ extension SQLiteBacked {
         }
     }
 
-    func tableExists(_ name: String) throws -> Bool {
-        let statement = try prepare(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1"
-        )
-        defer { sqlite3_finalize(statement) }
-        bind(name, to: statement, index: 1)
-        return sqlite3_step(statement) == SQLITE_ROW
-    }
 
     func bind(_ value: String, to statement: OpaquePointer, index: Int32) {
         sqlite3_bind_text(statement, index, value, -1, SQLiteSupport.transient)
