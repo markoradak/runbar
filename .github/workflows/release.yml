@@ -95,6 +95,46 @@ jobs:
             OTHER_CODE_SIGN_FLAGS="--timestamp --options=runtime" \
             build
 
+      # xcodebuild embeds Sparkle but does not reliably give every nested Mach-O
+      # (Autoupdate, Updater.app, the .xpc services) a hardened runtime AND a
+      # secure timestamp — and notarization requires both on every executable,
+      # so an otherwise-signed app still comes back Invalid. Re-sign Sparkle
+      # inside-out, then re-seal the app, preserving its generated entitlements.
+      - name: Re-sign Sparkle for notarization
+        env:
+          CODESIGN_IDENTITY: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+        run: |
+          APP="build/DerivedData/Build/Products/Release/Runbar.app"
+          FW="$APP/Contents/Frameworks/Sparkle.framework"
+
+          if [ -d "$FW" ]; then
+            for nested in \
+              "$FW"/Versions/Current/XPCServices/*.xpc \
+              "$FW"/Versions/Current/Updater.app \
+              "$FW"/Versions/Current/Autoupdate; do
+              [ -e "$nested" ] || continue
+              codesign --force --sign "$CODESIGN_IDENTITY" \
+                --options runtime --timestamp "$nested"
+            done
+            codesign --force --sign "$CODESIGN_IDENTITY" \
+              --options runtime --timestamp "$FW"
+          fi
+
+          # Preserve the app's generated entitlements so re-sealing the outer
+          # bundle doesn't strip them (empty/absent is fine — app is unsandboxed).
+          ENT="$RUNNER_TEMP/app.entitlements"
+          if codesign -d --entitlements - --xml "$APP" > "$ENT" 2>/dev/null && [ -s "$ENT" ]; then
+            codesign --force --sign "$CODESIGN_IDENTITY" \
+              --options runtime --timestamp --entitlements "$ENT" "$APP"
+          else
+            codesign --force --sign "$CODESIGN_IDENTITY" \
+              --options runtime --timestamp "$APP"
+          fi
+
+          # Fail here — before spending a notarization round-trip — if signing
+          # is inconsistent.
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
       # Notarize and staple the .app BEFORE zipping. Order matters: zipping an
       # un-stapled app ships an unnotarized bundle inside a notarized zip.
       - name: Notarize and staple
@@ -106,11 +146,32 @@ jobs:
           APP="build/DerivedData/Build/Products/Release/Runbar.app"
           test -d "$APP"
           ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/notarize.zip"
-          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+
+          # Capture the submission so we can pull Apple's per-file reason log if
+          # the result is Invalid — otherwise the failure is opaque ("Record not
+          # found" on staple is only the downstream symptom of a rejected app).
+          set +e
+          OUT="$(xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
-            --wait
+            --wait 2>&1)"
+          CODE=$?
+          set -e
+          echo "$OUT"
+          SUBMISSION_ID="$(printf '%s\n' "$OUT" | awk '/id:/{print $2; exit}')"
+
+          if [ "$CODE" -ne 0 ] || printf '%s\n' "$OUT" | grep -q "status: Invalid"; then
+            echo "::error::Notarization did not succeed — dumping Apple's reason log"
+            if [ -n "$SUBMISSION_ID" ]; then
+              xcrun notarytool log "$SUBMISSION_ID" \
+                --apple-id "$APPLE_ID" \
+                --password "$APPLE_APP_PASSWORD" \
+                --team-id "$APPLE_TEAM_ID" /dev/stdout || true
+            fi
+            exit 1
+          fi
+
           xcrun stapler staple "$APP"
           # Prove the shipped bundle is accepted by Gatekeeper as notarized.
           spctl -a -vvv -t install "$APP"
