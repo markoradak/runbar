@@ -31,6 +31,37 @@ final class PollSchedulerLocalPushTests: XCTestCase {
         XCTAssertEqual(events.map(\.trigger), [.launch, .localPush])
         XCTAssertEqual(events.last?.tierBefore, .hot)
     }
+
+    // Regression: a push whose run GitHub has not queued yet must NOT demote the
+    // repo (its pushedAt here is 2h old, so the old code dropped it to Cold and
+    // the run surfaced ~10m later). The post-push window keeps it Hot and
+    // schedules the first burst re-poll 2s out.
+    func testLocalPushStaysHotAndBurstsWhenRunNotYetQueued() async {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let clock = LocalPushClock(now: now)
+        let poller = LocalPushRunPoller(now: now)
+        let scheduler = PollScheduler(
+            poller: poller,
+            clock: clock,
+            randomSource: LocalPushRandomSource(),
+            credentialProvider: LocalPushCredentialProvider(),
+            recorder: LocalPushPollRecorder()
+        )
+        let repository = PollRepository(
+            key: "owner/repo",
+            identity: RepoIdentity(owner: "owner", name: "repo"),
+            pushedAt: now.addingTimeInterval(-7_200)
+        )
+        await scheduler.start(repositories: [repository])
+
+        _ = await scheduler.handleLocalPush(repositoryKey: "owner/repo")
+
+        let snapshot = await scheduler.snapshot()
+        let repo = snapshot.repositories.first { $0.repositoryKey == "owner/repo" }
+        XCTAssertEqual(repo?.tier, .hot)
+        XCTAssertEqual(repo?.nextPollAt, now.addingTimeInterval(2))
+        XCTAssertFalse(repo?.hasActiveRun ?? true)
+    }
 }
 
 private actor LocalPushClock: PollSchedulerClock {

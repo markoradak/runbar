@@ -76,13 +76,17 @@ intervals widen 4× and the menu bar shows an amber degraded state; recovery res
 
 ### Git watcher (`Git/GitWatcher.swift`)
 
-Zero-cost local push detection. FSEvents watches, per repo, **both**
+Near-zero-cost local push detection. FSEvents watches, per repo, **both**
 `.git/refs/remotes/origin/` *and* `.git/packed-refs` — git writes either, and watching only
 loose refs silently misses repos with packed refs. A remote-ref change promotes the repo to Hot
-and fires one immediate poll: the spinner appears ~1s after `git push` returns, at the cost of
-one API call and no server. It also tracks `.git/HEAD` and the current SHA per repo, which powers
-the "this run is the commit you're sitting on" accent (matched by `head_sha`). Worktrees are
-supported.
+and opens a **post-push window** (60s): an immediate poll, then re-polls tightening on 2s/4s/8s
+into the 8s Hot cadence. The window exists because GitHub queues the run a few seconds *after*
+`git push` returns — a single immediate poll almost always finds nothing, and (before this) the
+empty result demoted the repo to Warm/Cold, so the run only surfaced 30s–10m later. The window
+keeps polling until the run appears (then normal Hot polling takes over) or it expires; every
+request is conditional, so the extra polls are almost all free 304s until the run exists. It also
+tracks `.git/HEAD` and the current SHA per repo, which powers the "this run is the commit you're
+sitting on" accent (matched by `head_sha`). Worktrees are supported.
 
 ### Persistence (`Persistence/`)
 

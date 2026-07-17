@@ -10,12 +10,23 @@ actor PollScheduler: LocalPushPolling {
         var lastPollAt: Date?
         var hasActiveRun: Bool
         var latestCompletionAt: Date?
+        // Post-push window: while `now < localPushDeadline` and no run has
+        // appeared yet, the repo stays Hot and re-polls on `localPushBurst`
+        // (see `schedulePoll`). Both reset once a run appears or the window ends.
+        var localPushDeadline: Date?
+        var localPushBurst: [TimeInterval]
     }
 
     private static let warmWindow: TimeInterval = 60 * 60
     private static let jitterRange = 0.15
     private static let degradedIntervalMultiplier = 4.0
     private static let degradationThreshold = 500
+    // A `git push` reaches GitHub before the run is queued, so the immediate
+    // post-push poll usually finds nothing. Keep the repo Hot for this window,
+    // re-polling on a tightening burst so the run surfaces within seconds of
+    // being created instead of at the next Warm/Cold tick.
+    private static let localPushWindow: TimeInterval = 60
+    private static let localPushBurstIntervals: [TimeInterval] = [2, 4, 8]
 
     private let poller: any RunPolling
     private let clock: any PollSchedulerClock
@@ -115,7 +126,9 @@ actor PollScheduler: LocalPushPolling {
                     nextPollAt: now,
                     lastPollAt: nil,
                     hasActiveRun: false,
-                    latestCompletionAt: nil
+                    latestCompletionAt: nil,
+                    localPushDeadline: nil,
+                    localPushBurst: []
                 )
             }
         }
@@ -183,6 +196,8 @@ actor PollScheduler: LocalPushPolling {
         let now = await clock.now()
         state.tier = .hot
         state.nextPollAt = now
+        state.localPushDeadline = now.addingTimeInterval(Self.localPushWindow)
+        state.localPushBurst = Self.localPushBurstIntervals
         repositoryStates[repositoryKey] = state
         await emitSnapshot()
         let pollStartedAt = await pollRepository(
@@ -264,14 +279,9 @@ actor PollScheduler: LocalPushPolling {
 
             state.hasActiveRun = result.hasActiveRun
             state.latestCompletionAt = result.latestCompletionAt
-            state.tier = Self.tier(
-                repository: state.repository,
-                hasActiveRun: state.hasActiveRun,
-                latestCompletionAt: state.latestCompletionAt,
-                now: now
-            )
+            let schedule = await schedulePoll(state: &state, now: now)
+            state.tier = schedule.tier
             state.lastPollAt = result.fetchedAt
-            let schedule = await nextSchedule(tier: state.tier, from: now)
             state.nextPollAt = now.addingTimeInterval(schedule.interval)
             repositoryStates[key] = state
             lastSyncAt = result.fetchedAt
@@ -432,6 +442,39 @@ actor PollScheduler: LocalPushPolling {
             state.nextPollAt = now.addingTimeInterval(remainingDelay * multiplier)
             repositoryStates[key] = state
         }
+    }
+
+    /// Picks the next poll's tier and interval, honoring the post-push window.
+    ///
+    /// GitHub queues a run a few seconds *after* `git push` returns, so the
+    /// immediate post-push poll usually finds no run. Rather than let that empty
+    /// result demote the repo to Warm/Cold (where the run would only surface
+    /// 30s–10m later), keep it Hot until `localPushDeadline` and re-poll on the
+    /// tightening `localPushBurst` (2s, 4s, 8s, then the 8s Hot cadence). The
+    /// window clears the moment a run appears — normal Hot polling takes over —
+    /// or when it expires with no run. Requests stay conditional throughout, so
+    /// the extra polls are almost all free 304s until the run exists.
+    private func schedulePoll(
+        state: inout RepositoryState,
+        now: Date
+    ) async -> (tier: PollingTier, interval: TimeInterval, jitterFactor: Double) {
+        if !state.hasActiveRun, let deadline = state.localPushDeadline, now < deadline {
+            let base = state.localPushBurst.isEmpty
+                ? PollingTier.hot.baseInterval
+                : state.localPushBurst.removeFirst()
+            let degradation = isRateLimitDegraded ? Self.degradedIntervalMultiplier : 1
+            return (.hot, base * degradation, 1)
+        }
+        state.localPushDeadline = nil
+        state.localPushBurst = []
+        let tier = Self.tier(
+            repository: state.repository,
+            hasActiveRun: state.hasActiveRun,
+            latestCompletionAt: state.latestCompletionAt,
+            now: now
+        )
+        let schedule = await nextSchedule(tier: tier, from: now)
+        return (tier, schedule.interval, schedule.jitterFactor)
     }
 
     private func nextSchedule(tier: PollingTier, from _: Date) async -> (interval: TimeInterval, jitterFactor: Double) {
