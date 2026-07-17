@@ -567,16 +567,16 @@ struct RunbarMenuView: View {
                 }
                 metaChip(item.run.event, icon: "bolt.fill")
                 Spacer(minLength: 6)
-                FailureLogToggle(expanded: model.expandedLiveLogRunIDs.contains(item.id)) {
+                FailureLogToggle(expanded: model.logStreamer.expandedLiveLogRunIDs.contains(item.id)) {
                     withAnimation(.easeOut(duration: 0.15)) {
-                        model.toggleLiveLog(for: item)
+                        model.logStreamer.toggleLiveLog(for: item)
                     }
                 }
             }
 
             progressView(for: item)
 
-            if model.expandedLiveLogRunIDs.contains(item.id) {
+            if model.logStreamer.expandedLiveLogRunIDs.contains(item.id) {
                 liveLogContent(item)
             }
 
@@ -836,7 +836,7 @@ struct RunbarMenuView: View {
                     expandedFailureLogIDs.remove(item.id)
                 } else {
                     expandedFailureLogIDs.insert(item.id)
-                    model.expandFailureLog(for: item)
+                    model.logStreamer.expandFailureLog(for: item)
                 }
             }
         }
@@ -844,7 +844,7 @@ struct RunbarMenuView: View {
 
     @ViewBuilder
     private func failureLogContent(_ item: MenuBarRun) -> some View {
-        switch model.failureLogState(for: item.id) {
+        switch model.logStreamer.failureLogState(for: item.id) {
         case .idle, .loading:
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
@@ -858,7 +858,7 @@ struct RunbarMenuView: View {
                     .font(.mono(10))
                     .foregroundStyle(MenuTheme.red)
                 Spacer()
-                Button("retry") { model.expandFailureLog(for: item) }
+                Button("retry") { model.logStreamer.expandFailureLog(for: item) }
                     .buttonStyle(.link)
                     .font(.mono(10, .semibold))
             }
@@ -870,7 +870,7 @@ struct RunbarMenuView: View {
     /// Live build output for a running card, streaming while expanded.
     @ViewBuilder
     private func liveLogContent(_ item: MenuBarRun) -> some View {
-        switch model.liveLogState(for: item.id) {
+        switch model.logStreamer.liveLogState(for: item.id) {
         case .idle, .loading, .failed:
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)

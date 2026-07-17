@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import os
 
@@ -60,10 +61,12 @@ final class SettingsModel: ObservableObject {
     @Published private(set) var mutedRepositoryKeys: Set<String>
     @Published private(set) var appearancePreference: AppearancePreference
     @Published private(set) var acknowledgedFailureRunID: Int64?
-    @Published private(set) var failureLogs: [Int64: RunFailureLogState] = [:]
-    @Published private(set) var liveLogs: [Int64: RunFailureLogState] = [:]
-    @Published private(set) var expandedLiveLogRunIDs: Set<Int64> = []
-    private var liveLogTasks: [Int64: Task<Void, Never>] = [:]
+
+    /// Run-log presentation (failure logs and live tails). Owned here; its
+    /// changes are forwarded to this model's `objectWillChange` so views that
+    /// observe the model re-render when a log updates.
+    let logStreamer: RunLogStreamer
+    private var logStreamerObservation: AnyCancellable?
 
     private static let logger = Logger(subsystem: "app.runbar.Runbar", category: "authentication")
     private static let discoveryLogger = Logger(subsystem: "app.runbar.Runbar", category: "discovery")
@@ -141,13 +144,21 @@ final class SettingsModel: ObservableObject {
         notificationsFailuresOnly = notificationPreferenceStore.failuresOnly()
         mutedRepositoryKeys = notificationPreferenceStore.mutedRepositoryKeys()
         appearancePreference = appearancePreferenceStore.appearancePreference()
+        logStreamer = RunLogStreamer(
+            credentialProvider: self.credentialProvider,
+            githubClient: githubClient,
+            workflowJobsLoader: workflowJobsLoader,
+            providerMonitor: providerMonitor
+        )
+        logStreamerObservation = logStreamer.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
     }
 
     deinit {
         periodicRefreshTask?.cancel()
         wakeObservationTask?.cancel()
         menuBarTimerTask?.cancel()
-        for task in liveLogTasks.values { task.cancel() }
     }
 
     var isBusy: Bool {
@@ -603,7 +614,7 @@ final class SettingsModel: ObservableObject {
         isMenuBarVisible = true
         acknowledgeRecentFailureIfNeeded()
         restartMenuBarTimerIfNeeded()
-        resumeLiveLogs()
+        logStreamer.setMenuBarVisible(true)
     }
 
     func menuBarDidDisappear() {
@@ -611,7 +622,7 @@ final class SettingsModel: ObservableObject {
         acknowledgeRecentFailureIfNeeded()
         menuBarTimerTask?.cancel()
         menuBarTimerTask = nil
-        suspendLiveLogs()
+        logStreamer.setMenuBarVisible(false)
     }
 
     /// Opening the menu counts as seeing the newest failure, so the menu bar
@@ -630,6 +641,7 @@ final class SettingsModel: ObservableObject {
             menuBarNow = await menuBarClock.now()
             let snapshot = try await menuBarStore.loadMenuBarRuns(recentLimit: 20)
             menuBarRuns = snapshot
+            logStreamer.updateRunning(snapshot.running)
             await processCompletionNotifications(in: snapshot)
             menuBarLoadError = nil
             restartMenuBarTimerIfNeeded()
@@ -682,159 +694,6 @@ final class SettingsModel: ObservableObject {
             if mutedRepositoryKeys.contains(item.run.repositoryKey) { continue }
             try? await notificationNotifier.deliver(notification)
         }
-    }
-
-    // MARK: - Failure logs
-
-    func failureLogState(for runID: Int64) -> RunFailureLogState {
-        failureLogs[runID] ?? .idle
-    }
-
-    func expandFailureLog(for item: MenuBarRun) {
-        switch failureLogState(for: item.id) {
-        case .idle, .failed:
-            Task { await loadFailureLog(for: item) }
-        case .loading, .loaded:
-            break
-        }
-    }
-
-    func loadFailureLog(for item: MenuBarRun) async {
-        failureLogs[item.id] = .loading
-        do {
-            switch item.run.provider {
-            case .githubActions:
-                failureLogs[item.id] = .loaded(try await loadGitHubFailureLog(for: item))
-            case .vercel, .cloudflarePages:
-                guard let providerMonitor else { throw ProviderClientError.transport }
-                let lines = try await providerMonitor.executionLogLines(
-                    provider: item.run.provider,
-                    externalID: item.run.externalID,
-                    projectKey: item.run.projectKey ?? item.run.repositoryKey
-                )
-                failureLogs[item.id] = .loaded(
-                    RunFailureLog(
-                        jobName: nil,
-                        stepName: nil,
-                        lines: FailureLogText.tail(lines),
-                        webURL: item.run.htmlURL
-                    )
-                )
-            }
-        } catch {
-            failureLogs[item.id] = .failed("Runbar could not fetch the failure log.")
-        }
-    }
-
-    // MARK: - Live logs
-
-    func liveLogState(for runID: Int64) -> RunFailureLogState {
-        liveLogs[runID] ?? .idle
-    }
-
-    func toggleLiveLog(for item: MenuBarRun) {
-        if expandedLiveLogRunIDs.contains(item.id) {
-            expandedLiveLogRunIDs.remove(item.id)
-            liveLogTasks[item.id]?.cancel()
-            liveLogTasks.removeValue(forKey: item.id)
-        } else {
-            expandedLiveLogRunIDs.insert(item.id)
-            startLiveLog(for: item)
-        }
-    }
-
-    /// Restarts polling for cards that were expanded when the panel closed.
-    private func resumeLiveLogs() {
-        for item in menuBarRuns.running where expandedLiveLogRunIDs.contains(item.id) {
-            startLiveLog(for: item)
-        }
-    }
-
-    /// Pauses polling while the panel is hidden; expansion state is kept so
-    /// reopening the panel resumes the stream.
-    private func suspendLiveLogs() {
-        for task in liveLogTasks.values { task.cancel() }
-        liveLogTasks.removeAll()
-    }
-
-    private func startLiveLog(for item: MenuBarRun) {
-        guard liveLogTasks[item.id] == nil else { return }
-        if liveLogs[item.id] == nil { liveLogs[item.id] = .loading }
-        liveLogTasks[item.id] = Task { [weak self] in
-            await self?.runLiveLogLoop(for: item)
-        }
-    }
-
-    private func runLiveLogLoop(for item: MenuBarRun) async {
-        while !Task.isCancelled {
-            guard isMenuBarVisible,
-                  menuBarRuns.running.contains(where: { $0.id == item.id })
-            else { break }
-            do {
-                let lines = try await fetchLiveLogLines(for: item)
-                if !Task.isCancelled, !lines.isEmpty {
-                    liveLogs[item.id] = .loaded(
-                        RunFailureLog(jobName: nil, stepName: nil, lines: lines, webURL: item.run.htmlURL)
-                    )
-                }
-            } catch {
-                // Keep the last streamed lines on transient errors; before the
-                // first payload (e.g. still queued) stay in the loading state.
-            }
-            try? await Task.sleep(for: .seconds(4))
-        }
-        liveLogTasks.removeValue(forKey: item.id)
-    }
-
-    private func fetchLiveLogLines(for item: MenuBarRun) async throws -> [String] {
-        switch item.run.provider {
-        case .githubActions:
-            guard let githubClient, let workflowJobsLoader else { throw GitHubClientError.transport }
-            guard let token = try await credentialProvider.readCredential(), !token.isEmpty else {
-                throw GitHubClientError.authentication
-            }
-            let jobs = try await workflowJobsLoader.loadJobs(for: item, token: token).jobs
-            guard let job = jobs.first(where: { $0.status == "in_progress" }) ?? jobs.last else {
-                throw GitHubClientError.decoding
-            }
-            let text = try await githubClient.fetchJobLogText(
-                repository: item.repository,
-                jobID: job.id,
-                token: token
-            )
-            return FailureLogText.tail(text)
-        case .vercel, .cloudflarePages:
-            guard let providerMonitor else { throw ProviderClientError.transport }
-            let lines = try await providerMonitor.executionLogLines(
-                provider: item.run.provider,
-                externalID: item.run.externalID,
-                projectKey: item.run.projectKey ?? item.run.repositoryKey
-            )
-            return FailureLogText.tail(lines)
-        }
-    }
-
-    private func loadGitHubFailureLog(for item: MenuBarRun) async throws -> RunFailureLog {
-        guard let githubClient, let workflowJobsLoader else { throw GitHubClientError.transport }
-        guard let token = try await credentialProvider.readCredential(), !token.isEmpty else {
-            throw GitHubClientError.authentication
-        }
-        let jobs = try await workflowJobsLoader.loadJobs(for: item, token: token).jobs
-        guard let failedJob = jobs.first(where: { WorkflowRunPresentation.isFailure($0.conclusion) }) else {
-            throw GitHubClientError.decoding
-        }
-        let failedStep = failedJob.steps.first(where: { WorkflowRunPresentation.isFailure($0.conclusion) })
-        let logText = try await githubClient.fetchJobLogText(
-            repository: item.repository,
-            jobID: failedJob.id,
-            token: token
-        )
-        return RunFailureLog(
-            jobName: failedJob.name,
-            stepName: failedStep?.name,
-            lines: FailureLogText.failureTail(logText),
-            webURL: failedJob.htmlURL ?? item.run.htmlURL
-        )
     }
 
     func manualRefresh() async {
