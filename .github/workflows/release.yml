@@ -92,15 +92,16 @@ jobs:
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="$CODESIGN_IDENTITY" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
             OTHER_CODE_SIGN_FLAGS="--timestamp --options=runtime" \
             build
 
-      # xcodebuild embeds Sparkle but does not reliably give every nested Mach-O
-      # (Autoupdate, Updater.app, the .xpc services) a hardened runtime AND a
-      # secure timestamp — and notarization requires both on every executable,
-      # so an otherwise-signed app still comes back Invalid. Re-sign Sparkle
-      # inside-out, then re-seal the app, preserving its generated entitlements.
-      - name: Re-sign Sparkle for notarization
+      # Two notarization gotchas the plain build leaves behind: (1) xcodebuild
+      # does not reliably give Sparkle's nested Mach-Os (Autoupdate, Updater.app,
+      # the .xpc services) both a hardened runtime and a secure timestamp, and
+      # (2) a Release `build` still injects the get-task-allow debug entitlement.
+      # Re-sign Sparkle inside-out, then re-seal the app without that entitlement.
+      - name: Re-sign for notarization
         env:
           CODESIGN_IDENTITY: ${{ secrets.MACOS_CERTIFICATE_NAME }}
         run: |
@@ -120,16 +121,21 @@ jobs:
               --options runtime --timestamp "$FW"
           fi
 
-          # Preserve the app's generated entitlements so re-sealing the outer
-          # bundle doesn't strip them (empty/absent is fine — app is unsandboxed).
+          # Re-seal the app with its entitlements MINUS com.apple.security
+          # .get-task-allow. `xcodebuild build -configuration Release` injects
+          # that debug entitlement (it lets a debugger attach), and notarization
+          # rejects any executable requesting it. Everything else is preserved;
+          # an empty set is fine — the app is unsandboxed.
           ENT="$RUNNER_TEMP/app.entitlements"
-          if codesign -d --entitlements - --xml "$APP" > "$ENT" 2>/dev/null && [ -s "$ENT" ]; then
-            codesign --force --sign "$CODESIGN_IDENTITY" \
-              --options runtime --timestamp --entitlements "$ENT" "$APP"
-          else
-            codesign --force --sign "$CODESIGN_IDENTITY" \
-              --options runtime --timestamp "$APP"
+          if ! codesign -d --entitlements - --xml "$APP" > "$ENT" 2>/dev/null || [ ! -s "$ENT" ]; then
+            printf '%s\n' \
+              '<?xml version="1.0" encoding="UTF-8"?>' \
+              '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+              '<plist version="1.0"><dict/></plist>' > "$ENT"
           fi
+          /usr/libexec/PlistBuddy -c "Delete :com.apple.security.get-task-allow" "$ENT" 2>/dev/null || true
+          codesign --force --sign "$CODESIGN_IDENTITY" \
+            --options runtime --timestamp --entitlements "$ENT" "$APP"
 
           # Fail here — before spending a notarization round-trip — if signing
           # is inconsistent.
@@ -167,7 +173,8 @@ jobs:
               xcrun notarytool log "$SUBMISSION_ID" \
                 --apple-id "$APPLE_ID" \
                 --password "$APPLE_APP_PASSWORD" \
-                --team-id "$APPLE_TEAM_ID" /dev/stdout || true
+                --team-id "$APPLE_TEAM_ID" "$RUNNER_TEMP/notary-log.json" || true
+              cat "$RUNNER_TEMP/notary-log.json" 2>/dev/null || true
             fi
             exit 1
           fi
