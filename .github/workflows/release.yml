@@ -1,20 +1,25 @@
 name: Release
 
 # Triggered by scripts/release.sh pushing a v* tag:
-#   build (Release, ad-hoc signed) → zip → generate signed Sparkle appcast →
-#   publish zip + appcast.xml to this repo's GitHub release.
+#   build (Release, Developer ID signed) → notarize + staple → zip →
+#   generate signed Sparkle appcast → publish zip + appcast.xml to this repo's
+#   GitHub release.
 #
-# Required repository secret:
-#   SPARKLE_PRIVATE_KEY  EdDSA private key for appcast signing. Export it with:
-#                        <sparkle-bin>/generate_keys -x /dev/stdout
+# Required repository secrets:
+#   MACOS_CERTIFICATE       base64 of the Developer ID Application .p12
+#   MACOS_CERTIFICATE_PWD   the .p12 export password
+#   MACOS_CERTIFICATE_NAME  the identity string, e.g.
+#                           "Developer ID Application: Your Name (TEAMID)"
+#   KEYCHAIN_PASSWORD       any throwaway password for the temp CI keychain
+#   APPLE_ID                Apple ID email for notarytool
+#   APPLE_APP_PASSWORD      app-specific password from appleid.apple.com
+#   APPLE_TEAM_ID           Developer team ID
+#   SPARKLE_PRIVATE_KEY     EdDSA private key for appcast signing; its public
+#                           half is SUPublicEDKey in project.yml. Export it with
+#                           <sparkle-bin>/generate_keys -x /dev/stdout
 #
 # Releases publish to this repo, so the built-in GITHUB_TOKEN suffices — no
 # cross-repo PAT. The app's SUFeedURL points at this repo's latest release.
-#
-# ⚠️ Builds are ad-hoc signed, which Gatekeeper rejects on another machine:
-# users get "Runbar is damaged and can't be opened". Before the first public
-# release, add a Developer ID Application certificate and notarization to the
-# Build step. See docs/RELEASING.md.
 
 on:
   push:
@@ -49,15 +54,67 @@ jobs:
           echo "TAG=$TAG" >> "$GITHUB_ENV"
           echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
 
+      # Import the Developer ID Application certificate into a throwaway
+      # keychain so codesign can sign with it non-interactively.
+      - name: Set up signing keychain
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$MACOS_CERTIFICATE_PWD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          rm -f "$CERT_PATH"
+
+      # Hardened runtime is on (ENABLE_HARDENED_RUNTIME: YES in project.yml),
+      # which notarization requires; --timestamp gets a secure timestamp.
       - name: Build
+        env:
+          CODESIGN_IDENTITY: ${{ secrets.MACOS_CERTIFICATE_NAME }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           xcodegen generate
           xcodebuild -project Runbar.xcodeproj -scheme Runbar \
             -configuration Release \
             -derivedDataPath build/DerivedData \
             -destination 'platform=macOS' \
-            CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="$CODESIGN_IDENTITY" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            OTHER_CODE_SIGN_FLAGS="--timestamp --options=runtime" \
             build
+
+      # Notarize and staple the .app BEFORE zipping. Order matters: zipping an
+      # un-stapled app ships an unnotarized bundle inside a notarized zip.
+      - name: Notarize and staple
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          APP="build/DerivedData/Build/Products/Release/Runbar.app"
+          test -d "$APP"
+          ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$APP"
+          # Prove the shipped bundle is accepted by Gatekeeper as notarized.
+          spctl -a -vvv -t install "$APP"
+          xcrun stapler validate "$APP"
 
       - name: Package
         run: |
@@ -88,3 +145,8 @@ jobs:
             --generate-notes \
             "build/staging/Runbar-$VERSION.zip" \
             "build/staging/appcast.xml"
+
+      - name: Clean up keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" 2>/dev/null || true

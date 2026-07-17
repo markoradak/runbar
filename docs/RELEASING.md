@@ -1,82 +1,48 @@
 # Releasing
 
-## The blocker: builds are ad-hoc signed
+## Signing and notarization
 
-`.github/workflows/release.yml` builds with `CODE_SIGN_IDENTITY=-` (ad-hoc). That is fine on the
-machine that built it and **fails on every other Mac**: Gatekeeper shows *"Runbar is damaged and
-can't be opened. You should move it to the Trash."* — which reads as malware, not as a signing
-gap.
+`.github/workflows/release.yml` imports a Developer ID Application certificate, signs the build
+with it under a hardened runtime, then notarizes and staples the `.app` **before** zipping. This
+is what lets Runbar open on a Mac other than the one that built it — an ad-hoc signature
+(`CODE_SIGN_IDENTITY=-`) instead produces *"Runbar is damaged and can't be opened"* on every other
+machine, which reads as malware.
 
-This must be fixed before the first public release. It is the one step that cannot be done from
-the repo, because it needs an Apple account.
+### Required repository secrets
 
-### What it takes
+These are already set on this repo (shared with the `battery` app, which uses the same Apple
+Developer account and the same secret names):
 
-1. **Apple Developer Program — $99/year.** Required for a Developer ID certificate. There is no
-   free path to notarization.
-2. **Create a Developer ID Application certificate** in the Apple Developer portal, export it as a
-   `.p12`, and base64 it: `base64 -i cert.p12 | pbcopy`.
-3. **Create an app-specific password** at appleid.apple.com for notarytool.
-4. **Add repository secrets:**
-   - `DEVELOPER_ID_CERT_P12` — the base64 `.p12`
-   - `DEVELOPER_ID_CERT_PASSWORD` — its export password
-   - `APPLE_ID` — the Apple ID email
-   - `APPLE_APP_PASSWORD` — the app-specific password
-   - `APPLE_TEAM_ID` — from the developer portal
-5. **Replace the Build step's signing flags** with the real identity, then notarize and staple
-   *before* zipping:
+| Secret | What it is |
+| --- | --- |
+| `MACOS_CERTIFICATE` | base64 of the Developer ID Application `.p12` (`base64 -i cert.p12 \| pbcopy`) |
+| `MACOS_CERTIFICATE_PWD` | the `.p12` export password |
+| `MACOS_CERTIFICATE_NAME` | the identity string, e.g. `Developer ID Application: Your Name (TEAMID)` |
+| `KEYCHAIN_PASSWORD` | any throwaway password for the temp CI keychain |
+| `APPLE_ID` | Apple ID email for notarytool |
+| `APPLE_APP_PASSWORD` | app-specific password from appleid.apple.com |
+| `APPLE_TEAM_ID` | Developer team ID |
+| `SPARKLE_PRIVATE_KEY` | EdDSA appcast-signing key — see [Cutting a release](#cutting-a-release) |
 
-   ```yaml
-   - name: Import signing certificate
-     env:
-       CERT_P12: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
-       CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
-     run: |
-       echo "$CERT_P12" | base64 --decode > /tmp/cert.p12
-       security create-keychain -p "" build.keychain
-       security default-keychain -s build.keychain
-       security unlock-keychain -p "" build.keychain
-       security import /tmp/cert.p12 -k build.keychain -P "$CERT_PASSWORD" \
-         -T /usr/bin/codesign
-       security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" build.keychain
-       rm /tmp/cert.p12
-
-   # In the Build step, replace CODE_SIGN_IDENTITY=- with:
-   #   CODE_SIGN_IDENTITY="Developer ID Application" \
-   #   DEVELOPMENT_TEAM=${{ secrets.APPLE_TEAM_ID }} \
-   #   OTHER_CODE_SIGN_FLAGS="--timestamp --options=runtime"
-
-   - name: Notarize and staple
-     env:
-       APPLE_ID: ${{ secrets.APPLE_ID }}
-       APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-     run: |
-       APP="build/DerivedData/Build/Products/Release/Runbar.app"
-       ditto -c -k --keepParent "$APP" /tmp/notarize.zip
-       xcrun notarytool submit /tmp/notarize.zip \
-         --apple-id "$APPLE_ID" \
-         --password "$APPLE_APP_PASSWORD" \
-         --team-id "$APPLE_TEAM_ID" \
-         --wait
-       xcrun stapler staple "$APP"
-   ```
-
-   Order matters: notarize and staple the `.app`, **then** run the existing Package step to zip it.
-   Zipping first staples nothing and ships an unnotarized app inside a notarized zip.
-
-6. **Hardened runtime is already on** (`ENABLE_HARDENED_RUNTIME: YES` in `project.yml`), which
-   notarization requires. Sandbox is intentionally off — see `docs/ARCHITECTURE.md`.
+A Developer ID Application certificate is per-*team*, not per-app, so signing both Runbar and
+`battery` with it is expected. Getting there in the first place needs the **Apple Developer Program
+($99/year)** — there is no free path to notarization — a **Developer ID Application certificate**
+exported as a `.p12`, and an **app-specific password** at appleid.apple.com. Hardened runtime is
+already on (`ENABLE_HARDENED_RUNTIME: YES` in `project.yml`), which notarization requires; sandbox
+is intentionally off — see `docs/ARCHITECTURE.md`.
 
 ### Verifying
+
+The Notarize step already runs these in CI and fails the release if either does not pass:
 
 ```bash
 spctl -a -vvv -t install /path/to/Runbar.app   # → "accepted", source=Notarized Developer ID
 xcrun stapler validate /path/to/Runbar.app     # → "The validate action worked!"
 ```
 
-Test on a **different Mac than the one that built it**, or the check is meaningless — the build
-machine trusts its own ad-hoc signature.
+After the first release, download the published zip and open it on a **different Mac than a build
+machine** as a final sanity check — a machine trusts a signature it produced, so testing there
+proves nothing.
 
 ## The feed URL is permanent
 
@@ -104,11 +70,14 @@ scripts/release.sh patch -n   # dry run
 
 It bumps `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in lockstep (Sparkle compares the
 build number; users see the marketing version), commits, tags, and pushes. The `v*` tag triggers
-`release.yml`, which builds, zips, generates a signed appcast, and publishes both to this repo's
-GitHub release.
+`release.yml`, which builds, signs, notarizes and staples the app, zips it, generates a signed
+appcast, and publishes both to this repo's GitHub release.
 
-Requires one secret: `SPARKLE_PRIVATE_KEY`, the EdDSA key whose public half is `SUPublicEDKey` in
-`project.yml`. Export it with `<sparkle-bin>/generate_keys -x /dev/stdout`. **If that key is lost,
-auto-update is permanently broken for every installed copy** — the public half is baked into
-shipped binaries and Sparkle will reject anything signed with a new key. Back it up somewhere that
-isn't this laptop.
+The appcast is signed with `SPARKLE_PRIVATE_KEY`, the EdDSA key whose public half is
+`SUPublicEDKey` in `project.yml` (`0Y/fgay6lWHRxqpxECSMG38IXYiVlolaDTAK9jXwgxM=`). Export a key
+with `<sparkle-bin>/generate_keys -x /dev/stdout`. **The private key and the baked-in public key
+must correspond, or Sparkle rejects every update.** Runbar shares this key with the `battery`
+app — one key signs both apps' feeds — so `SUPublicEDKey` here matches `battery`'s. **If the key
+is lost, auto-update is permanently broken for every installed copy of both apps**, since the
+public half ships inside every binary and cannot be changed for installs already in the field.
+Back it up somewhere that isn't this laptop.

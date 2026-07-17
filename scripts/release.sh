@@ -85,7 +85,7 @@ TAG="v$VERSION"
 
 echo "Release plan:"
 echo "  $CURRENT (build $BUILD_NUMBER)  ->  $VERSION (build $NEW_BUILD_NUMBER)   (tag $TAG)"
-echo "  triggers: build → signed appcast → publish to runbar-app/runbar-releases → updater"
+echo "  triggers: build → sign + notarize → signed appcast → publish to this repo's release → updater"
 echo ""
 
 # ── Preflight ────────────────────────────────────────────────────────────────
