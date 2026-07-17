@@ -17,8 +17,11 @@ final class StatusBarController: NSObject {
         backing: .buffered,
         defer: false
     )
+    private static let escapeKeyCode: UInt16 = 53
+
     private var modelObservation: AnyCancellable?
     private var outsideClickMonitor: Any?
+    private var escapeKeyMonitor: Any?
     private var isClosing = false
     private var activityTimer: Timer?
     private var activityFrameIndex = 0
@@ -207,6 +210,7 @@ final class StatusBarController: NSObject {
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
         installOutsideClickMonitor()
+        installEscapeKeyMonitor()
         // Driven from AppKit rather than SwiftUI onAppear/onDisappear: the
         // hosting view stays in the ordered-out panel between opens, so its
         // appearance callbacks are not reliable for show/hide tracking.
@@ -219,6 +223,7 @@ final class StatusBarController: NSObject {
         guard panel.isVisible, !isClosing else { return }
         isClosing = true
         removeOutsideClickMonitor()
+        removeEscapeKeyMonitor()
         statusItem.button?.highlight(false)
         model.menuBarDidDisappear()
         NSAnimationContext.runAnimationGroup({ context in
@@ -256,6 +261,27 @@ final class StatusBarController: NSObject {
         if let outsideClickMonitor {
             NSEvent.removeMonitor(outsideClickMonitor)
             self.outsideClickMonitor = nil
+        }
+    }
+
+    /// Closes the panel on Escape. A local monitor catches the key while the
+    /// panel is the key window; it consumes only Escape and passes every other
+    /// key through.
+    private func installEscapeKeyMonitor() {
+        guard escapeKeyMonitor == nil else { return }
+        escapeKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            guard let self, event.keyCode == Self.escapeKeyCode, panel.isVisible, !isClosing else {
+                return event
+            }
+            closePanel()
+            return nil
+        }
+    }
+
+    private func removeEscapeKeyMonitor() {
+        if let escapeKeyMonitor {
+            NSEvent.removeMonitor(escapeKeyMonitor)
+            self.escapeKeyMonitor = nil
         }
     }
 
