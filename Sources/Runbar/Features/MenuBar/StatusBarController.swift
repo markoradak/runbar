@@ -18,6 +18,7 @@ final class StatusBarController: NSObject {
         defer: false
     )
     private var modelObservation: AnyCancellable?
+    private var outsideClickMonitor: Any?
     private var activityTimer: Timer?
     private var activityFrameIndex = 0
     private var displayedState: MenuBarIconState?
@@ -201,6 +202,7 @@ final class StatusBarController: NSObject {
         button.highlight(true)
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
+        installOutsideClickMonitor()
         // Driven from AppKit rather than SwiftUI onAppear/onDisappear: the
         // hosting view stays in the ordered-out panel between opens, so its
         // appearance callbacks are not reliable for show/hide tracking.
@@ -208,9 +210,36 @@ final class StatusBarController: NSObject {
     }
 
     private func closePanel() {
+        removeOutsideClickMonitor()
         panel.orderOut(nil)
         statusItem.button?.highlight(false)
         model.menuBarDidDisappear()
+    }
+
+    /// Closes the panel on the next mouse-down outside it. The global monitor
+    /// only sees clicks destined for other apps or the desktop, so clicks inside
+    /// the panel never reach it. Clicks on the status item are ignored here so
+    /// the toggle action closes the panel exactly once instead of closing then
+    /// reopening on the same click.
+    private func installOutsideClickMonitor() {
+        guard outsideClickMonitor == nil else { return }
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self] _ in
+            guard let self else { return }
+            if let button = statusItem.button, let window = button.window {
+                let buttonFrame = window.convertToScreen(button.convert(button.bounds, to: nil))
+                if buttonFrame.contains(NSEvent.mouseLocation) { return }
+            }
+            closePanel()
+        }
+    }
+
+    private func removeOutsideClickMonitor() {
+        if let outsideClickMonitor {
+            NSEvent.removeMonitor(outsideClickMonitor)
+            self.outsideClickMonitor = nil
+        }
     }
 
     func presentSettings() {
