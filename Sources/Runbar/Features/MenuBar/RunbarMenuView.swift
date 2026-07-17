@@ -330,7 +330,7 @@ struct RunbarMenuView: View {
 
     private var header: some View {
         HStack(spacing: 11) {
-            RunbarIconTile(tint: statusAccent, size: 36)
+            RunbarIconTile(tint: statusAccent, size: 36, mode: isRunning ? .running : .idle)
             VStack(alignment: .leading, spacing: 4) {
                 RunbarWordmarkShape()
                     .fill(MenuTheme.textPrimary)
@@ -351,6 +351,11 @@ struct RunbarMenuView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .background(MenuTheme.surface)
+    }
+
+    private var isRunning: Bool {
+        if case .running = model.menuBarIconState { return true }
+        return false
     }
 
     private var statusAccent: Color {

@@ -30,13 +30,30 @@ struct RunbarLogoMark: View {
     }
 }
 
+/// How the tile's dots are lit.
+enum RunbarIconTileMode: Equatable {
+    /// The designed brand mark — dots at their asset opacities. For logo spots.
+    case brand
+    /// At rest as a status indicator: every dot at the shared idle opacity,
+    /// matching the menu-bar icon's idle look.
+    case idle
+    /// Active as a status indicator: the highlight cycles the 2×3 grid, matching
+    /// the menu-bar icon while builds run.
+    case running
+}
+
 /// Faithful, tintable rendering of Design/brand/icon-basic.svg: a 150-unit
 /// tile (corner radius 44, 10-unit soft border band) with r=9 dots at the
-/// asset's exact positions and opacities.
+/// asset's exact positions. In `.brand` mode the dots keep their designed
+/// opacities; in `.idle`/`.running` the tile behaves as a status indicator,
+/// sharing `MenuBarActivityIndicatorStyle` with the menu-bar icon.
 struct RunbarIconTile: View {
     var tint: Color
     var size: CGFloat = 34
+    var mode: RunbarIconTileMode = .brand
 
+    /// Column-major to match `MenuBarActivityIndicatorStyle.animationOrder`:
+    /// entries 0–2 are the left column top→bottom, 3–5 the right column.
     private static let dots: [(x: CGFloat, y: CGFloat, opacity: Double)] = [
         (59, 42, 0.85), (59, 75, 0.7), (59, 108, 0.66),
         (92, 42, 1.0), (92, 75, 0.25), (92, 108, 0.4)
@@ -46,6 +63,7 @@ struct RunbarIconTile: View {
     /// dots in from the tile edges without changing their arrangement.
     private static let markScale: CGFloat = 0.85
     private static let markCenter = CGPoint(x: 75.5, y: 75)
+    private static let frameInterval = 1 / MenuBarActivityIndicatorStyle.animationFramesPerSecond
 
     var body: some View {
         let scale = size / 150
@@ -54,20 +72,51 @@ struct RunbarIconTile: View {
                 .fill(tint.opacity(0.10))
             RoundedRectangle(cornerRadius: 44 * scale, style: .continuous)
                 .strokeBorder(tint.opacity(0.18), lineWidth: 13 * scale)
-            ZStack {
-                ForEach(Array(Self.dots.enumerated()), id: \.offset) { _, dot in
-                    Circle()
-                        .fill(tint.opacity(dot.opacity))
-                        .frame(width: 22 * Self.markScale * scale, height: 22 * Self.markScale * scale)
-                        .position(
-                            x: (Self.markCenter.x + (dot.x - Self.markCenter.x) * Self.markScale) * scale,
-                            y: (Self.markCenter.y + (dot.y - Self.markCenter.y) * Self.markScale) * scale
-                        )
-                }
-            }
-            .frame(width: size, height: size)
+            dotGroup(scale: scale)
+                .frame(width: size, height: size)
         }
         .frame(width: size, height: size)
+    }
+
+    @ViewBuilder
+    private func dotGroup(scale: CGFloat) -> some View {
+        if mode == .running {
+            TimelineView(.periodic(from: Date(), by: Self.frameInterval)) { context in
+                dots(scale: scale, activeStep: Self.activeStep(at: context.date))
+            }
+        } else {
+            dots(scale: scale, activeStep: nil)
+        }
+    }
+
+    private func dots(scale: CGFloat, activeStep: Int?) -> some View {
+        ZStack {
+            ForEach(Array(Self.dots.enumerated()), id: \.offset) { index, dot in
+                Circle()
+                    .fill(tint.opacity(opacity(index: index, brand: dot.opacity, activeStep: activeStep)))
+                    .frame(width: 22 * Self.markScale * scale, height: 22 * Self.markScale * scale)
+                    .position(
+                        x: (Self.markCenter.x + (dot.x - Self.markCenter.x) * Self.markScale) * scale,
+                        y: (Self.markCenter.y + (dot.y - Self.markCenter.y) * Self.markScale) * scale
+                    )
+            }
+        }
+    }
+
+    private func opacity(index: Int, brand: Double, activeStep: Int?) -> Double {
+        switch mode {
+        case .brand: brand
+        case .idle: Double(MenuBarActivityIndicatorStyle.idleOpacity)
+        case .running: Double(MenuBarActivityIndicatorStyle.dotOpacity(index: index, activeStep: activeStep))
+        }
+    }
+
+    /// Absolute-time frame index, so the phase is stable even if the timeline is
+    /// rescheduled on a redraw.
+    private static func activeStep(at date: Date) -> Int {
+        let count = MenuBarActivityIndicatorStyle.animationFrameCount
+        let ticks = Int((date.timeIntervalSinceReferenceDate * MenuBarActivityIndicatorStyle.animationFramesPerSecond).rounded(.down))
+        return ((ticks % count) + count) % count
     }
 }
 

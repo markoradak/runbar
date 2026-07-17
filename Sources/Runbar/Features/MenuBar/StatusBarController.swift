@@ -255,9 +255,6 @@ private final class StatusBarPanel: NSPanel {
 }
 
 private enum StatusBarDotRenderer {
-    // Clockwise around the 2 × 3 grid: TL, TR, MR, BR, BL, ML.
-    private static let animationOrder = [0, 1, 3, 5, 4, 2]
-
     static func makeActivityFrames() -> [NSImage] {
         (0 ..< MenuBarActivityIndicatorStyle.animationFrameCount).map { step in
             makeFrame(activeStep: step)
@@ -287,12 +284,7 @@ private enum StatusBarDotRenderer {
     }
 
     private static func opacity(for index: Int, activeStep: Int?) -> CGFloat {
-        guard let activeStep else { return MenuBarActivityIndicatorStyle.idleOpacity }
-        let activeIndex = animationOrder[activeStep]
-        let trailingIndex = animationOrder[(activeStep + animationOrder.count - 1) % animationOrder.count]
-        if index == activeIndex { return 1 }
-        if index == trailingIndex { return MenuBarActivityIndicatorStyle.trailingOpacity }
-        return MenuBarActivityIndicatorStyle.inactiveOpacity
+        MenuBarActivityIndicatorStyle.dotOpacity(index: index, activeStep: activeStep)
     }
 
     private static func dotRect(index: Int, bounds: CGRect) -> CGRect {

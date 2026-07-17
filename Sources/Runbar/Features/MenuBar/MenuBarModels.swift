@@ -191,8 +191,28 @@ enum MenuBarActivityIndicatorStyle {
     static let columnSpacing: CGFloat = 2.2
     static let rowSpacing: CGFloat = 1.3
     static let idleOpacity: CGFloat = 0.58
-    static let inactiveOpacity: CGFloat = 0.20
-    static let trailingOpacity: CGFloat = 0.52
+    static let inactiveOpacity: CGFloat = 0.18
     static let animationFramesPerSecond: Double = 8
     static let animationFrameCount = 6
+
+    /// Dot indices in the order the highlight travels the 2×3 grid.
+    /// Dots are indexed column-major: 0–2 = left column top→bottom, 3–5 = right.
+    static let animationOrder = [0, 1, 3, 5, 4, 2]
+
+    /// A comet trail fading back from the leading dot: index 0 is the leader,
+    /// each following entry is the dot one step further behind along the travel
+    /// order. Dots beyond the trail sit at `inactiveOpacity`.
+    private static let trailOpacities: [CGFloat] = [1.0, 0.62, 0.40, 0.26]
+
+    /// Per-dot opacity for a given animation step. `activeStep == nil` means the
+    /// indicator is at rest (every dot at `idleOpacity`). The single source of
+    /// truth shared by the menu-bar icon and the popover header tile.
+    static func dotOpacity(index: Int, activeStep: Int?) -> CGFloat {
+        guard let activeStep else { return idleOpacity }
+        let count = animationOrder.count
+        guard let orderIndex = animationOrder.firstIndex(of: index) else { return inactiveOpacity }
+        // How many steps this dot sits behind the leader, wrapping the cycle.
+        let distanceBehind = (activeStep - orderIndex + count) % count
+        return distanceBehind < trailOpacities.count ? trailOpacities[distanceBehind] : inactiveOpacity
+    }
 }
