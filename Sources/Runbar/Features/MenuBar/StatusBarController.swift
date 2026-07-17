@@ -19,6 +19,7 @@ final class StatusBarController: NSObject {
     )
     private var modelObservation: AnyCancellable?
     private var outsideClickMonitor: Any?
+    private var isClosing = false
     private var activityTimer: Timer?
     private var activityFrameIndex = 0
     private var displayedState: MenuBarIconState?
@@ -161,7 +162,7 @@ final class StatusBarController: NSObject {
 
     @objc
     private func togglePanel(_ sender: NSStatusBarButton) {
-        if panel.isVisible {
+        if panel.isVisible, !isClosing {
             closePanel()
         } else {
             showPanel(relativeTo: sender)
@@ -200,6 +201,9 @@ final class StatusBarController: NSObject {
         panel.setContentSize(panelSize)
         panel.setFrameOrigin(NSPoint(x: x, y: y))
         button.highlight(true)
+        // Instant appear, and cancel any in-flight fade-out from a quick reopen.
+        isClosing = false
+        panel.alphaValue = 1
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
         installOutsideClickMonitor()
@@ -209,11 +213,24 @@ final class StatusBarController: NSObject {
         model.menuBarDidAppear()
     }
 
+    /// Fades the panel out before ordering it out, matching the native
+    /// status-bar popover feel (instant appear, faded dismiss).
     private func closePanel() {
+        guard panel.isVisible, !isClosing else { return }
+        isClosing = true
         removeOutsideClickMonitor()
-        panel.orderOut(nil)
         statusItem.button?.highlight(false)
         model.menuBarDidDisappear()
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.16
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            guard let self, isClosing else { return }
+            panel.orderOut(nil)
+            panel.alphaValue = 1
+            isClosing = false
+        })
     }
 
     /// Closes the panel on the next mouse-down outside it. The global monitor
