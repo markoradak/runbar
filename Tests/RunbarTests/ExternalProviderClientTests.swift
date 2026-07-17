@@ -51,6 +51,32 @@ final class ExternalProviderClientTests: XCTestCase {
         )
     }
 
+    func testVercelDropsAutoSkippedCancellationsButKeepsRealCancels() async throws {
+        // Two CANCELED deployments: one auto-skipped (no buildingAt — Vercel's
+        // ignored build step, hidden from its dashboard) and one canceled after
+        // it started building. Only the latter should surface.
+        let transport = ProviderMockTransport(responses: [
+            .json(#"{"user":{"username":"marco","email":"m@example.com"}}"#),
+            .json(#"{"teams":[]}"#),
+            .json(#"{"deployments":[{"uid":"dpl_skipped","name":"landing","created":1000000,"state":"CANCELED","readyState":"CANCELED","projectId":"prj_landing","target":"production","meta":{"githubCommitOrg":"owner","githubCommitRepo":"monorepo","githubCommitRef":"main","githubCommitMessage":"unrelated change"}},{"uid":"dpl_realcancel","name":"landing","created":2000000,"buildingAt":2001000,"ready":2002000,"state":"CANCELED","readyState":"CANCELED","projectId":"prj_landing","target":"production","meta":{"githubCommitOrg":"owner","githubCommitRepo":"monorepo","githubCommitRef":"main","githubCommitMessage":"canceled mid-build"}}]}"#)
+        ])
+        let client = VercelClient(
+            transport: transport,
+            baseURL: URL(string: "https://vercel.test")!,
+            now: { Date(timeIntervalSince1970: 3_000) }
+        )
+
+        let result = try await client.fetch(token: "secret-vercel-token")
+
+        XCTAssertEqual(result.executions.count, 1)
+        XCTAssertNil(
+            result.executions.first(where: { $0.externalID == "dpl_skipped" }),
+            "an auto-skipped (never-built) cancellation should be dropped"
+        )
+        let real = try XCTUnwrap(result.executions.first(where: { $0.externalID == "dpl_realcancel" }))
+        XCTAssertEqual(real.conclusion, "cancelled")
+    }
+
     func testCloudflareDiscoversLatestPageDeploymentWithReadOnlyBearerToken() async throws {
         let transport = ProviderMockTransport(responses: [
             .json(#"{"success":true,"result":{"status":"active"}}"#),

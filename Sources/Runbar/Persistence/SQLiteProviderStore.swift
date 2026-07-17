@@ -22,6 +22,23 @@ actor SQLiteProviderStore: ProviderExecutionStoring, SQLiteBacked {
         try execute("BEGIN IMMEDIATE TRANSACTION")
         do {
             for execution in executions { try upsert(execution) }
+
+            // Drop any zero-duration cancelled deployments already stored for
+            // this provider. VercelClient now filters these at ingest (a build
+            // Vercel auto-skipped for "no changes", which it hides from its own
+            // dashboard), but rows persisted by an earlier build would otherwise
+            // linger until the 30-day prune — so clear them on the next refresh.
+            let dropSkipped = try prepare(
+                """
+                DELETE FROM provider_runs
+                WHERE provider = ? AND conclusion = 'cancelled'
+                  AND run_started_at = created_at AND updated_at = created_at
+                """
+            )
+            defer { sqlite3_finalize(dropSkipped) }
+            bind(provider.rawValue, to: dropSkipped, index: 1)
+            try stepDone(dropSkipped)
+
             let prune = try prepare("DELETE FROM provider_runs WHERE created_at < ?")
             defer { sqlite3_finalize(prune) }
             sqlite3_bind_double(

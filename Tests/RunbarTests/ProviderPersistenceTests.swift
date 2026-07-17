@@ -85,6 +85,32 @@ final class ProviderPersistenceTests: XCTestCase {
         XCTAssertEqual(snapshot.recent.map(\.run.provider), [.cloudflarePages])
     }
 
+    func testSaveDropsZeroDurationCancelledDeploymentsAndKeepsRealOnes() async throws {
+        let databaseURL = temporaryDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: databaseURL.deletingLastPathComponent()) }
+        let providerStore = try SQLiteProviderStore(path: databaseURL.path)
+        let menuStore = try SQLiteMenuBarStore(path: databaseURL.path)
+        let now = Date()
+        // Phantom: auto-skipped, cancelled with no elapsed time. Real: cancelled
+        // after building. Only the real one should survive a save.
+        let phantom = execution(
+            provider: .vercel, id: "dpl_skipped", project: "landing",
+            status: "completed", conclusion: "cancelled",
+            createdAt: now, updatedAt: now, sha: ""
+        )
+        let realCancel = execution(
+            provider: .vercel, id: "dpl_realcancel", project: "landing",
+            status: "completed", conclusion: "cancelled",
+            createdAt: now.addingTimeInterval(-60), updatedAt: now.addingTimeInterval(-30), sha: ""
+        )
+        try await providerStore.saveProviderExecutions([phantom, realCancel], provider: .vercel)
+
+        let snapshot = try await menuStore.loadMenuBarRuns(recentLimit: 20)
+        let ids = snapshot.recent.map(\.run.externalID)
+        XCTAssertFalse(ids.contains("dpl_skipped"), "zero-duration cancelled deployment should be purged")
+        XCTAssertTrue(ids.contains("dpl_realcancel"), "a cancellation that actually built should survive")
+    }
+
     private func execution(
         provider: ExecutionProvider,
         id: String,

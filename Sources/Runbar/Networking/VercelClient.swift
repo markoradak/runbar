@@ -61,6 +61,13 @@ struct VercelClient: ExternalProviderClient {
         guard let createdAt = ProviderDateParser.milliseconds(item.created) else { return nil }
         let state = item.readyState ?? item.state ?? "QUEUED"
         let normalized = normalize(state: state)
+        // Vercel auto-cancels a deployment when the project's watched paths did
+        // not change (its "ignored build step" — common in a monorepo where a
+        // push touched a different app). Such a deployment never builds, so it
+        // has no `buildingAt`, and Vercel omits it from its own dashboard. Drop
+        // it rather than surface a phantom cancelled run the user never sees on
+        // Vercel.
+        if normalized.conclusion == "cancelled", item.buildingAt == nil { return nil }
         let repository = RepoIdentity(
             owner: item.meta?.githubCommitOrg ?? scope.slug,
             name: item.meta?.githubCommitRepo ?? item.name
