@@ -85,15 +85,112 @@ final class ExternalProviderMonitorTests: XCTestCase {
         XCTAssertEqual(idleInterval, ExternalProviderMonitor.idleInterval)
 
         // A local push opens the hot window even though the provider has not
-        // created the deployment yet.
+        // created the deployment yet, and the burst tightens rather than
+        // sitting at a flat cadence that could miss the deployment by seconds
+        // and then wait a whole interval.
         _ = await monitor.handleLocalPush(repositoryKey: "owner/site")
-        let hotInterval = await monitor.currentPollInterval()
-        XCTAssertEqual(hotInterval, ExternalProviderMonitor.hotInterval)
+        var scheduled = await monitor.scheduledInterval()
+        XCTAssertEqual(scheduled, .seconds(2))
+
+        for expected in [Duration.seconds(4), .seconds(8), ExternalProviderMonitor.hotInterval] {
+            await monitor.refreshAll()
+            scheduled = await monitor.scheduledInterval()
+            XCTAssertEqual(scheduled, expected)
+        }
 
         // After the window elapses the cadence falls back to idle.
         clock.advance(by: ExternalProviderMonitor.hotWindowDuration + 1)
         let expiredInterval = await monitor.currentPollInterval()
         XCTAssertEqual(expiredInterval, ExternalProviderMonitor.idleInterval)
+    }
+
+    /// The burst exists to catch the deployment the push created, so it ends
+    /// as soon as one we have not seen before appears.
+    func testNewDeploymentClosesThePostPushWindow() async throws {
+        let clock = MutableClock(now: Date(timeIntervalSince1970: 1_000))
+        let deployment = ProviderExecution(
+            provider: .vercel,
+            externalID: "dpl_new",
+            repository: RepoIdentity(owner: "owner", name: "site"),
+            projectKey: "team/site",
+            projectName: "site",
+            status: "in_progress",
+            conclusion: nil,
+            startedAt: clock.now(),
+            createdAt: clock.now(),
+            updatedAt: clock.now(),
+            headBranch: "main",
+            headSHA: "abc",
+            environment: "Production",
+            displayTitle: "Build",
+            webURL: "https://vercel.com/build"
+        )
+        let client = SequencedExternalProviderClient(
+            provider: .vercel,
+            results: [
+                // Connect, then the push-triggered refresh that is still empty.
+                .success(Self.fetchResult(remaining: 900, at: clock.now())),
+                .success(Self.fetchResult(remaining: 900, at: clock.now()))
+            ],
+            fallback: .success(
+                ProviderFetchResult(
+                    provider: .vercel,
+                    accountLabel: "Studio",
+                    executions: [deployment],
+                    projectCount: 1,
+                    rateLimit: ProviderRateLimit(remaining: 900, resetAt: nil),
+                    fetchedAt: clock.now()
+                )
+            )
+        )
+        let monitor = ExternalProviderMonitor(
+            clients: [client],
+            store: MemoryProviderExecutionStore(),
+            now: { clock.now() }
+        )
+        try await monitor.connect(provider: .vercel, token: "token")
+
+        _ = await monitor.handleLocalPush(repositoryKey: "owner/site")
+        let burstStep = await monitor.scheduledInterval()
+        XCTAssertEqual(burstStep, .seconds(2), "Push should start the burst")
+
+        // The deployment now shows up: the window closes and the cadence
+        // reverts to the active-execution rate instead of burning the burst.
+        await monitor.refreshAll()
+        let afterDeployment = await monitor.currentPollInterval()
+        XCTAssertEqual(afterDeployment, ExternalProviderMonitor.activeInterval)
+    }
+
+    /// A scheduled refresh overlapping a push used to swallow the
+    /// push-triggered one, costing a whole interval before the deployment
+    /// surfaced. It must be queued and re-run instead.
+    func testRefreshRequestedDuringAnInFlightRefreshIsNotDropped() async throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        // Gate the second fetch so `connect` completes and the refresh under
+        // test is the one left in flight.
+        let client = GatedExternalProviderClient(
+            provider: .vercel,
+            result: Self.fetchResult(remaining: 900, at: now),
+            gateAtFetch: 2
+        )
+        let monitor = ExternalProviderMonitor(
+            clients: [client],
+            store: MemoryProviderExecutionStore(),
+            now: { now }
+        )
+        try await monitor.connect(provider: .vercel, token: "token")
+
+        let inFlight = Task { await monitor.refreshAll() }
+        await client.waitUntilGateReached()
+
+        // Arrives mid-refresh — this is the push-triggered case.
+        await monitor.refreshAll()
+
+        await client.release()
+        await inFlight.value
+
+        let fetches = await client.fetchCount()
+        XCTAssertEqual(fetches, 3, "Refresh requested mid-flight was dropped instead of re-run")
     }
 
     /// A 429 carries `Retry-After`. Honouring it is the whole point: the poll
@@ -269,6 +366,51 @@ private actor SequencedExternalProviderClient: ExternalProviderClient {
 
     func logLines(externalID _: String, projectKey _: String, token _: String) async throws -> [String] {
         []
+    }
+
+    func fetchCount() -> Int { fetches }
+}
+
+/// Blocks the `gateAtFetch`-th fetch until `release()`, so a test can hold a
+/// refresh in flight and observe what happens to one requested meanwhile.
+private actor GatedExternalProviderClient: ExternalProviderClient {
+    nonisolated let provider: ExecutionProvider
+    private let result: ProviderFetchResult
+    private let gateAtFetch: Int
+    private var fetches = 0
+    private var gate: CheckedContinuation<Void, Never>?
+    private var gateReached: CheckedContinuation<Void, Never>?
+    private var hasReachedGate = false
+
+    init(provider: ExecutionProvider, result: ProviderFetchResult, gateAtFetch: Int) {
+        self.provider = provider
+        self.result = result
+        self.gateAtFetch = gateAtFetch
+    }
+
+    func fetch(token _: String) async throws -> ProviderFetchResult {
+        fetches += 1
+        if fetches == gateAtFetch {
+            hasReachedGate = true
+            gateReached?.resume()
+            gateReached = nil
+            await withCheckedContinuation { gate = $0 }
+        }
+        return result
+    }
+
+    func logLines(externalID _: String, projectKey _: String, token _: String) async throws -> [String] {
+        []
+    }
+
+    func waitUntilGateReached() async {
+        guard !hasReachedGate else { return }
+        await withCheckedContinuation { gateReached = $0 }
+    }
+
+    func release() {
+        gate?.resume()
+        gate = nil
     }
 
     func fetchCount() -> Int { fetches }
