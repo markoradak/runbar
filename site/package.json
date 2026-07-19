@@ -1,0 +1,26 @@
+{
+  "name": "runbar-site",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "next": "^16.2.10",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.1",
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9",
+    "typescript": "^5.9.2"
+  },
+  "//": "Next vendors postcss 8.4.31, which carries GHSA-qx2v-qp2m-jg93. The advisory is fixed in 8.5.10 and the bump is semver-compatible, so pull it forward rather than let `npm audit fix --force` downgrade Next to 9.x.",
+  "overrides": {
+    "postcss": "^8.5.19"
+  }
+}

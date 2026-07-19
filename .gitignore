@@ -8,7 +8,16 @@ xcuserdata/
 
 # Generated deterministically by bootstrap.sh from project.yml.
 Runbar.xcodeproj/
-build/
+# Anchored so it stays the release workflow's staging dir and doesn't also
+# swallow a nested site/build/.
+/build/
+
+# Landing page (site/)
+node_modules/
+.next/
+.vercel/
+next-env.d.ts
+*.tsbuildinfo
 
 # Local tool configuration
 .claude/

@@ -1,0 +1,654 @@
+/*
+ * Metrics transcribed from RunbarMenuView.swift. Where the app specifies a
+ * value (padding 14/12, radius 10/9/7, mono 9.5/10/10.5/11.5) this file uses
+ * the same number rather than a rounded approximation.
+ */
+
+.panel {
+  /* RunbarPanelMetrics.cardWidth = 420, cornerRadius = 20 */
+  width: 420px;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--wash);
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
+  user-select: none;
+}
+
+.hairline {
+  height: 1px;
+  background: var(--border);
+}
+
+/* ----------------------------------------------------------------- header -- */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px 14px;
+  background: var(--surface);
+}
+
+.appTile {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--fill);
+  color: var(--text);
+  transition: color 0.35s ease, box-shadow 0.35s ease, background 0.35s ease;
+}
+
+/*
+ * Tinted by status, as RunbarIconTile is by statusAccent. The mark inherits
+ * `color`, so tinting the tile tints the dots.
+ */
+.appTileRunning {
+  color: var(--blue);
+  background: rgb(from var(--blue) r g b / 0.1);
+  box-shadow: inset 0 0 0 1px rgb(from var(--blue) r g b / 0.25);
+}
+
+.appTileFailure {
+  color: var(--red);
+  background: rgb(from var(--red) r g b / 0.1);
+  box-shadow: inset 0 0 0 1px rgb(from var(--red) r g b / 0.25);
+}
+
+.appTileIdle {
+  color: var(--green);
+  background: rgb(from var(--green) r g b / 0.1);
+  box-shadow: inset 0 0 0 1px rgb(from var(--green) r g b / 0.22);
+}
+
+.accentBlue {
+  color: var(--blue);
+}
+
+.accentRed {
+  color: var(--red);
+}
+
+.accentGreen {
+  color: var(--green);
+}
+
+.headerText {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.wordmark {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.statusLine {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.caret {
+  font-size: 10px;
+  font-weight: 700;
+}
+
+
+.statusText {
+  font-size: 10px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.header > :global(.pill) {
+  margin-left: auto;
+  flex: none;
+}
+
+/* ---------------------------------------------------------------- content -- */
+
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 14px;
+  /*
+   * Fixed rather than content-sized. The app's ScrollView has a stable frame
+   * (minHeight 320, idealHeight 500); here it also stops the hero from
+   * reflowing every time a run completes and a card leaves the list.
+   */
+  height: 452px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--fill-active) transparent;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sectionTitle {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  flex: none;
+}
+
+.sectionRule {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.sectionCount {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.countBlue {
+  color: var(--blue);
+  background: rgb(from var(--blue) r g b / 0.12);
+}
+
+.countMuted {
+  color: var(--text-secondary);
+  background: var(--fill-hover);
+}
+
+/* Dashed outline, matching StrokeStyle(lineWidth: 1, dash: [4, 3]). */
+.emptyRunning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 9px;
+}
+
+.emptyText {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* ----------------------------------------------------------- running card -- */
+
+.runningCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  animation: cardIn 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes cardIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.cardTop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cardIdentity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.cardTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.runTitle {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.workflowBadge {
+  flex: none;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--fill);
+  font-size: 8.5px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+
+.repoName {
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.spacer {
+  flex: 1;
+  min-width: 6px;
+}
+
+.elapsedBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgb(from var(--blue) r g b / 0.12);
+  color: var(--blue);
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.elapsedDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: blink 1.6s ease-in-out infinite;
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.chipRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.metaChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3.5px 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--fill);
+  font-size: 9.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+/* -------------------------------------------------------------- progress -- */
+
+.progressGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgb(var(--primary) / 0.08);
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  border-radius: 999px;
+  /* LinearGradient(colors: [color.opacity(0.65), color], leading -> trailing) */
+  transition: width 0.35s linear;
+}
+
+.fillBlue {
+  background: linear-gradient(
+    90deg,
+    rgb(from var(--blue) r g b / 0.65),
+    var(--blue)
+  );
+}
+
+.fillAmber {
+  background: linear-gradient(
+    90deg,
+    rgb(from var(--amber) r g b / 0.65),
+    var(--amber)
+  );
+}
+
+.progressMeta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9.5px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.runningLongText {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--amber);
+}
+
+.noHistory {
+  font-size: 9.5px;
+  color: rgb(var(--primary) / 0.38);
+}
+
+/* ------------------------------------------------------------- recent row -- */
+
+.recentList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.recentRow {
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+/* matchesLocalHEAD gets a blue outline; failures a red wash and outline. */
+.recentRowHead {
+  border-color: rgb(from var(--blue) r g b / 0.35);
+}
+
+.recentRowFailed {
+  background: rgb(from var(--red) r g b / 0.07);
+  border-color: rgb(from var(--red) r g b / 0.25);
+}
+
+.headBadge {
+  flex: none;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: rgb(from var(--blue) r g b / 0.14);
+  color: var(--blue);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.trailing {
+  position: relative;
+  display: grid;
+  place-items: center end;
+  flex: none;
+  min-width: 52px;
+  min-height: 20px;
+}
+
+.trailing > * {
+  grid-area: 1 / 1;
+  transition: opacity 0.12s ease;
+}
+
+.timestamp {
+  font-size: 9.5px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.rowAction {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--fill);
+  color: var(--text-secondary);
+  cursor: pointer;
+  justify-self: end;
+}
+
+.rowAction:hover {
+  background: var(--fill-active);
+  color: var(--text);
+}
+
+.recentMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  min-width: 0;
+}
+
+.recentRepo {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.textGreen {
+  color: var(--green);
+}
+
+.textRed {
+  color: var(--red);
+}
+
+.chevron {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.chevron:hover {
+  background: var(--fill-hover);
+  color: var(--text);
+}
+
+/* ---------------------------------------------------------- terminal log -- */
+
+/* terminalBlock(): always dark, regardless of app theme. Outer spacing lives on
+   .terminalWrap so the floating copy button positions against the log itself. */
+.terminalBlock {
+  margin: 0;
+  padding: 10px;
+  /* Room for the copy button so the last line never sits under it. */
+  padding-bottom: 32px;
+  border-radius: 7px;
+  background: #0e1017;
+  font-size: 10.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  max-height: 200px;
+  overflow-y: auto;
+  animation: logIn 0.15s ease-out;
+}
+
+@keyframes logIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.logLine {
+  color: #ebebeb;
+}
+
+.logError {
+  color: #ff7a70;
+}
+
+.logWarning {
+  color: #f2c25c;
+}
+
+/* ----------------------------------------------------------------- footer -- */
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--surface);
+}
+
+.footerMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.syncText {
+  font-size: 9.5px;
+  color: var(--text-secondary);
+}
+
+.versionText {
+  font-size: 9.5px;
+  color: rgb(var(--primary) / 0.33);
+}
+
+.footerButtons {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.footerButton {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--fill);
+  color: var(--text-secondary);
+}
+
+/* ------------------------------------------------------- provider tiles -- */
+
+.tile {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: rgb(var(--primary) / 0.055);
+  border: 1px solid rgb(var(--primary) / 0.09);
+}
+
+.markMono {
+  color: rgb(var(--primary) / 0.88);
+}
+
+.tileBadge {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px var(--wash);
+}
+
+.badgeGreen {
+  background: var(--green);
+}
+
+.badgeRed {
+  background: var(--red);
+}
+
+@media (max-width: 460px) {
+  .panel {
+    width: 100%;
+  }
+}
+
+/* Wrapper so the copy button can float over the scrolling log. */
+.terminalWrap {
+  position: relative;
+  margin: 8px 0 2px;
+}
+
+.copyLog {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: rgb(255 255 255 / 0.08);
+  color: rgb(255 255 255 / 0.72);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.copyLog:hover {
+  background: rgb(255 255 255 / 0.16);
+  color: #fff;
+}
+
+.copyLogDone {
+  color: #59d97a;
+}

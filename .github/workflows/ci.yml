@@ -1,9 +1,23 @@
 name: CI
 
+# The landing page in site/ is deployed by Vercel and shares none of this
+# toolchain, so changes confined to it must not spin up a macOS runner.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'site/**'
+      - 'docs/**'
+      - 'Design/**'
+      - '**/*.md'
+      - 'LICENSE'
   pull_request:
+    paths-ignore:
+      - 'site/**'
+      - 'docs/**'
+      - 'Design/**'
+      - '**/*.md'
+      - 'LICENSE'
 
 jobs:
   test:

@@ -1,0 +1,300 @@
+/*
+ * Design tokens ported from the app's MenuTheme
+ * (Sources/Runbar/Features/MenuBar/RunbarMenuView.swift).
+ *
+ * The app calls this palette a "devops console": a warm paper wash rather than
+ * pure white, surfaces built from low-opacity overlays instead of hardcoded
+ * grays, and semantic system colors for status. Keeping the overlay approach
+ * (rather than flattening to hex) is what makes surfaces stack correctly when
+ * nested, exactly as they do in SwiftUI.
+ */
+
+:root {
+  /* Panel wash — light #FAF8F4, dark #191814. Warm, never neutral gray. */
+  --wash: #faf8f4;
+  --wash-raised: #ffffff;
+
+  /* SwiftUI: Color.primary / .secondary, and overlays derived from them. */
+  --primary: 26 24 20;
+  --text: rgb(var(--primary));
+  --text-secondary: rgb(var(--primary) / 0.55);
+  --text-tertiary: rgb(var(--primary) / 0.38);
+
+  /* MenuTheme.border == Color.primary.opacity(0.10) */
+  --border: rgb(var(--primary) / 0.1);
+  --border-strong: rgb(var(--primary) / 0.16);
+
+  /*
+   * MenuTheme.surface — raised card fill. Brightens in light mode and deepens
+   * in dark, so surfaces never pull the panel toward middle gray.
+   */
+  --surface: rgb(255 255 255 / 0.5);
+
+  /* Surface fills, matching the 0.03–0.13 ladder used across the app. */
+  --fill-subtle: rgb(var(--primary) / 0.035);
+  --fill: rgb(var(--primary) / 0.05);
+  --fill-hover: rgb(var(--primary) / 0.08);
+  --fill-active: rgb(var(--primary) / 0.12);
+
+  /* Status colors — Apple system colors, light variants. */
+  --green: #34c759;
+  --red: #ff3b30;
+  --amber: #ff9500;
+  --blue: #007aff;
+
+  /* Continuous corner radii, as used in the app: 5 / 7 / 8 / 10. */
+  --r-xs: 5px;
+  --r-sm: 7px;
+  --r-md: 8px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+
+  /* Panel shadow, from the status-item panel. */
+  --shadow-panel: 0 8px 18px rgb(0 0 0 / 0.22), 0 1px 2px rgb(0 0 0 / 0.08);
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.06), 0 4px 12px rgb(0 0 0 / 0.04);
+
+  /*
+   * On macOS these resolve to the very typefaces the app draws with — SF Pro
+   * and SF Mono — so the page and the product render in the same voice.
+   */
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono",
+    "Cascadia Code", monospace;
+
+  --max-w: 1080px;
+  --gutter: 24px;
+}
+
+/*
+ * Dark tokens are declared twice on purpose: once behind the media query so a
+ * no-JS visitor still gets the correct default, and once behind [data-theme] so
+ * the header toggle can override it. CSS has no way to share one declaration
+ * block across a media query and a plain selector, and dropping the media query
+ * would mean a white flash for anyone with JS off.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --wash: #191814;
+    --wash-raised: #211f1a;
+
+    --primary: 250 248 244;
+    --text: rgb(var(--primary) / 0.92);
+    --text-secondary: rgb(var(--primary) / 0.55);
+    --text-tertiary: rgb(var(--primary) / 0.36);
+
+    --border: rgb(var(--primary) / 0.12);
+    --border-strong: rgb(var(--primary) / 0.2);
+    --surface: rgb(0 0 0 / 0.22);
+
+    --fill-subtle: rgb(var(--primary) / 0.04);
+    --fill: rgb(var(--primary) / 0.07);
+    --fill-hover: rgb(var(--primary) / 0.11);
+    --fill-active: rgb(var(--primary) / 0.16);
+
+    /* Apple system colors, dark variants. */
+    --green: #30d158;
+    --red: #ff453a;
+    --amber: #ff9f0a;
+    --blue: #0a84ff;
+
+    --shadow-panel: 0 8px 24px rgb(0 0 0 / 0.5), 0 1px 2px rgb(0 0 0 / 0.3);
+    --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 12px rgb(0 0 0 / 0.2);
+  }
+}
+
+:root[data-theme="dark"] {
+  --wash: #191814;
+  --wash-raised: #211f1a;
+
+  --primary: 250 248 244;
+  --text: rgb(var(--primary) / 0.92);
+  --text-secondary: rgb(var(--primary) / 0.55);
+  --text-tertiary: rgb(var(--primary) / 0.36);
+
+  --border: rgb(var(--primary) / 0.12);
+  --border-strong: rgb(var(--primary) / 0.2);
+  --surface: rgb(0 0 0 / 0.22);
+
+  --fill-subtle: rgb(var(--primary) / 0.04);
+  --fill: rgb(var(--primary) / 0.07);
+  --fill-hover: rgb(var(--primary) / 0.11);
+  --fill-active: rgb(var(--primary) / 0.16);
+
+  --green: #30d158;
+  --red: #ff453a;
+  --amber: #ff9f0a;
+  --blue: #0a84ff;
+
+  --shadow-panel: 0 8px 24px rgb(0 0 0 / 0.5), 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 12px rgb(0 0 0 / 0.2);
+}
+
+/* ---------------------------------------------------------------- reset -- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+  /*
+   * The hero's decorative grid is deliberately wider than the viewport. `clip`
+   * rather than `hidden` because `hidden` on the root turns it into a scroll
+   * container, which breaks the sticky nav.
+   */
+  overflow-x: clip;
+}
+
+body {
+  margin: 0;
+  background: var(--wash);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: clip;
+}
+
+h1,
+h2,
+h3,
+p,
+figure,
+ul {
+  margin: 0;
+}
+
+ul {
+  padding: 0;
+  list-style: none;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 3px;
+  border-radius: var(--r-xs);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ------------------------------------------------------------- primitives -- */
+
+.wrap {
+  width: 100%;
+  max-width: var(--max-w);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "calt" 0;
+}
+
+/*
+ * The app's signature component, matching statusPill() in RunbarMenuView:
+ * capsule, 6px status dot, mono 10 medium, 5%-primary fill, hairline border.
+ * The label is textPrimary, not secondary — only the dot carries the status.
+ */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--fill);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.pill__dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.pill--green .pill__dot {
+  background: var(--green);
+}
+.pill--blue .pill__dot {
+  background: var(--blue);
+}
+.pill--red .pill__dot {
+  background: var(--red);
+}
+.pill--amber .pill__dot {
+  background: var(--amber);
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+/* ---------------------------------------------------------------- layout -- */
+
+.section {
+  padding-block: clamp(52px, 6.5vw, 88px);
+  border-top: 1px solid var(--border);
+  /* Clears the 56px sticky nav when jumped to via an anchor link. */
+  scroll-margin-top: 56px;
+}
+
+.section__head {
+  max-width: 640px;
+  margin-bottom: 48px;
+}
+
+.section__title {
+  margin-top: 14px;
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.section__lede {
+  margin-top: 16px;
+  font-size: 17px;
+  color: var(--text-secondary);
+  text-wrap: pretty;
+}

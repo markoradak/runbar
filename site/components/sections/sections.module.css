@@ -1,0 +1,888 @@
+/* ---------------------------------------------------------------- reveal -- */
+
+.reveal {
+  opacity: 0;
+  transform: translateY(14px);
+  transition:
+    opacity 0.55s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.revealShown {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
+/* ------------------------------------------------------------ shared card -- */
+
+.race,
+.scan,
+.scopes,
+.exchange {
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--fill-subtle);
+}
+
+/* ------------------------------------------------------------ latency race -- */
+
+.raceHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 16px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.raceEvent {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.racePulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 3px rgb(from var(--green) r g b / 0.18);
+}
+
+.raceClock {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.track {
+  margin-bottom: 18px;
+}
+
+.trackHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.trackLabel {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.trackValue {
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.valueBlue {
+  color: var(--blue);
+}
+
+.valueMuted {
+  color: var(--text-secondary);
+}
+
+.trackRail {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--fill-hover);
+  overflow: hidden;
+}
+
+.trackBar {
+  position: relative;
+  height: 100%;
+  min-width: 8px;
+  border-radius: 999px;
+  /* Draws in once on reveal; the delay lets the two bars stagger slightly. */
+  transition: width 0.85s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.barBlue {
+  background: linear-gradient(
+    90deg,
+    rgb(from var(--blue) r g b / 0.65),
+    var(--blue)
+  );
+  transition-delay: 0.05s;
+}
+
+.barMuted {
+  background: var(--fill-active);
+  transition-delay: 0.22s;
+}
+
+/* Leading-edge dot, so a 2.5%-wide bar still reads as a point in time. */
+.trackCap {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transform: translateY(-50%);
+  background: var(--blue);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trackBar {
+    transition: none;
+  }
+}
+
+.raceAxis {
+  display: flex;
+  justify-content: space-between;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.raceTick {
+  font-size: 9.5px;
+  color: var(--text-tertiary);
+}
+
+/* --------------------------------------------------------- progress states -- */
+
+.states {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.stateCard {
+  display: flex;
+  flex-direction: column;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--fill-subtle);
+}
+
+.stateHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.stateWorkflow {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.stateElapsed {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--blue);
+  font-variant-numeric: tabular-nums;
+}
+
+.stateElapsedAmber {
+  color: var(--amber);
+}
+
+/* Overrun runs get a sweep, matching the app's refusal to park a determinate
+   bar at 99% once a run passes its median. */
+.stateIndeterminate {
+  position: relative;
+  height: 100%;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.stateIndeterminate::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 38%;
+  border-radius: 999px;
+  background: var(--amber);
+  animation: sweep 2.1s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+@keyframes sweep {
+  0% {
+    left: -38%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+.stateRepo {
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+}
+
+.stateProgress {
+  margin-top: 16px;
+  min-height: 30px;
+}
+
+.stateTrack {
+  height: 4px;
+  border-radius: 999px;
+  background: rgb(var(--primary) / 0.08);
+  overflow: hidden;
+}
+
+.stateFill {
+  height: 100%;
+  border-radius: 999px;
+}
+
+.stateFillBlue {
+  background: linear-gradient(
+    90deg,
+    rgb(from var(--blue) r g b / 0.65),
+    var(--blue)
+  );
+}
+
+.stateFillAmber {
+  background: linear-gradient(
+    90deg,
+    rgb(from var(--amber) r g b / 0.65),
+    var(--amber)
+  );
+}
+
+.stateMeta {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 6px;
+  font-size: 9.5px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.stateOverrun {
+  display: block;
+  margin-top: 6px;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--amber);
+}
+
+.stateNoHistory {
+  font-size: 9.5px;
+  color: var(--text-tertiary);
+}
+
+.stateNote {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  text-wrap: pretty;
+}
+
+/* ------------------------------------------------------------- repo scan -- */
+
+.scanHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.scanPath {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.scanDepth {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+}
+
+.scanList {
+  display: flex;
+  flex-direction: column;
+}
+
+.scanRow {
+  display: grid;
+  grid-template-columns: 1fr 1.5fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 8px;
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  opacity: 0.42;
+  transition: opacity 0.25s ease, background 0.25s ease;
+}
+
+.scanRowResolved {
+  opacity: 1;
+}
+
+.scanRowActive {
+  opacity: 1;
+  background: var(--fill);
+}
+
+.scanName {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.scanFound {
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scanVerdict {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 96px;
+}
+
+.scanSkipped {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  padding: 4px 9px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.scanScanning {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.scanSpinner {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  border-top-color: var(--blue);
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.scanFoot {
+  padding-top: 14px;
+}
+
+.scanCount {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 620px) {
+  .scanRow {
+    grid-template-columns: 1fr auto;
+  }
+  .scanFound {
+    display: none;
+  }
+}
+
+/* ---------------------------------------------------------------- scopes -- */
+
+.scopeHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.scopeGranted {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 8px;
+}
+
+.scopeRow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 0;
+  flex-wrap: wrap;
+}
+
+.scopeCheck {
+  color: var(--green);
+  flex: none;
+}
+
+.scopeName {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.scopeAccess {
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgb(from var(--green) r g b / 0.12);
+  color: var(--green);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.scopeNote {
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+}
+
+.scopeDivider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 12px;
+}
+
+.scopeDivider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.scopeDividerText {
+  font-size: 9.5px;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.scopeWithheld {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.scopeWithheldItem {
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  text-decoration: line-through;
+  text-decoration-color: rgb(var(--primary) / 0.3);
+}
+
+.scopeFoot {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  text-wrap: pretty;
+}
+
+/* -------------------------------------------------------------- exchange -- */
+
+.exchangeRow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.exchangeVerb {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--blue);
+}
+
+.exchangeStatus {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--green);
+}
+
+.exchangePath {
+  font-size: 11.5px;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.exchangeHeader {
+  margin: 5px 0 0;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+}
+
+.exchangeEtag {
+  color: var(--text-secondary);
+}
+
+.exchangeUnchanged {
+  color: var(--green);
+}
+
+/* Downward connector between request and response. */
+.exchangeArrow {
+  width: 1px;
+  height: 20px;
+  margin: 12px 0 12px 6px;
+  background: linear-gradient(var(--border-strong), transparent);
+}
+
+.exchangeNote {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  text-wrap: pretty;
+}
+
+/* ---------------------------------------------------------- failure log -- */
+
+.failure {
+  border: 1px solid rgb(from var(--red) r g b / 0.25);
+  border-radius: var(--r-xl);
+  background: rgb(from var(--red) r g b / 0.06);
+  overflow: hidden;
+}
+
+.failureRow {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 14px 16px;
+}
+
+.failureIdentity {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.failureTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.failureTitle {
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.failureBadge {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--fill);
+  font-size: 8.5px;
+  color: var(--text-tertiary);
+}
+
+.failureMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+
+.failureWord {
+  color: var(--red);
+}
+
+.failureChevron {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--fill);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.failureChevron:hover {
+  background: var(--fill-active);
+  color: var(--text);
+}
+
+/* Always dark, regardless of page theme — same as terminalBlock() in the app. */
+.failureTerminal {
+  position: relative;
+  margin: 0 12px 12px;
+  border-radius: var(--r-md);
+  background: #0e1017;
+  overflow: hidden;
+}
+
+.failureLog {
+  margin: 0;
+  /* Bottom padding clears the floating copy button so the last line stays
+     readable when the log is scrolled to the end. */
+  padding: 14px 16px 46px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-x: auto;
+  max-height: 290px;
+  overflow-y: auto;
+}
+
+/* Log line colouring, matching TerminalLogView's attributedText: plain lines
+   near-white, Warning: amber, Error: red. Defined here as well as in
+   panel.module.css because CSS Modules are scoped per file — referencing a
+   class that lives in the other stylesheet resolves to undefined, which renders
+   dark text on the dark terminal. */
+.logLine {
+  color: #ebebeb;
+}
+
+.logError {
+  color: #ff7a70;
+}
+
+.logWarning {
+  color: #f2c25c;
+}
+
+.copyButton {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: rgb(255 255 255 / 0.08);
+  color: rgb(255 255 255 / 0.72);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.copyButton:hover {
+  background: rgb(255 255 255 / 0.16);
+  color: #fff;
+}
+
+.copyButtonDone {
+  color: #59d97a;
+}
+
+.copyLabel {
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+/* --------------------------------------------------------- integrations -- */
+
+/* stretch, not start — the request panel should run the full height of the
+   provider column rather than stopping short of the last card. */
+.integrations {
+  display: grid;
+  grid-template-columns: 1.25fr 0.75fr;
+  align-items: stretch;
+  gap: 20px;
+}
+
+@media (max-width: 940px) {
+  .integrations {
+    grid-template-columns: 1fr;
+  }
+}
+
+.providerList {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.providerCard {
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--fill-subtle);
+}
+
+.providerHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.providerName {
+  margin-top: 14px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.providerDetail {
+  margin-top: 6px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  text-wrap: pretty;
+}
+
+.request {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--fill-subtle);
+}
+
+.requestTitle {
+  margin-top: 10px;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.requestLede {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  text-wrap: pretty;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 16px;
+}
+
+/*
+ * The notes field absorbs whatever height the provider column has spare, so the
+ * panel fills its row without the button floating away from the inputs.
+ */
+.fieldGrow {
+  flex: 1;
+  min-height: 96px;
+}
+
+.fieldGrow .textarea {
+  flex: 1;
+}
+
+.fieldLabel {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.optional {
+  text-transform: none;
+  letter-spacing: 0;
+  opacity: 0.7;
+}
+
+.input,
+.textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--wash);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+.input:focus-visible,
+.textarea:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.requestButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 18px;
+  padding: 11px 16px;
+  border: 1px solid transparent;
+  border-radius: var(--r-lg);
+  background: var(--text);
+  color: var(--wash);
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: opacity 0.15s ease, transform 0.12s ease;
+}
+
+.requestButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+  opacity: 0.9;
+}
+
+.requestButton:disabled {
+  background: var(--fill);
+  border-color: var(--border);
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+  transform: none;
+}
