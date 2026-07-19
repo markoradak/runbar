@@ -18,6 +18,14 @@ name: Release
 #                           half is SUPublicEDKey in project.yml. Export it with
 #                           <sparkle-bin>/generate_keys -x /dev/stdout
 #
+# Optional:
+#   REVALIDATE_SECRET       shared secret for runbar.app's /api/revalidate, so
+#                           the site's download link updates the moment a
+#                           release publishes. Must match the REVALIDATE_SECRET
+#                           environment variable set in the Vercel project.
+#                           Omit it and the site falls back to its hourly
+#                           revalidate; the release still succeeds either way.
+#
 # Releases publish to this repo, so the built-in GITHUB_TOKEN suffices — no
 # cross-repo PAT. The app's SUFeedURL points at this repo's latest release.
 
@@ -213,6 +221,23 @@ jobs:
             --generate-notes \
             "build/staging/Runbar-$VERSION.zip" \
             "build/staging/appcast.xml"
+
+      # runbar.app reads the latest release from the GitHub API and caches it
+      # for an hour (site/lib/release.ts), so without this the download button
+      # keeps serving the *previous* zip for up to that long after a release.
+      # Non-fatal by design: the release itself has already published, and the
+      # hourly revalidate still catches up on its own.
+      - name: Refresh site release cache
+        env:
+          REVALIDATE_SECRET: ${{ secrets.REVALIDATE_SECRET }}
+        run: |
+          if [ -z "$REVALIDATE_SECRET" ]; then
+            echo "::warning::REVALIDATE_SECRET is not set — skipping site refresh"
+            exit 0
+          fi
+          curl -fsS --max-time 30 -X POST https://runbar.app/api/revalidate \
+            -H "x-revalidate-secret: $REVALIDATE_SECRET" \
+            || echo "::warning::Site revalidation failed; runbar.app will catch up within the hour"
 
       - name: Clean up keychain
         if: always()

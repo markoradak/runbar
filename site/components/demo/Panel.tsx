@@ -95,9 +95,13 @@ export function Panel({
           <span className={`mono ${styles.syncText}`}>
             synced {relativeText(clock % 300)}
           </span>
-          <span className={`mono ${styles.versionText}`}>
-            v{version ?? "0.1.6"}
-          </span>
+          {/* `getLatestRelease` returns a null version when the GitHub API is
+              unreachable. Omit the label rather than fall back to a literal,
+              which would quietly show the wrong version every release after
+              the one it was written against. */}
+          {version ? (
+            <span className={`mono ${styles.versionText}`}>v{version}</span>
+          ) : null}
         </div>
         <div className={styles.footerButtons}>
           <FooterButton label="Refresh now" d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" />
