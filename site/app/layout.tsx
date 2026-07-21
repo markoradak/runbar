@@ -1,9 +1,15 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
-// Set NEXT_PUBLIC_SITE_URL in the Vercel project once the domain is attached;
-// this default only affects the absolute URLs in OG/Twitter tags.
-const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://runbar.app";
+/*
+ * The canonical origin, and the base every OG/Twitter URL is resolved against.
+ * It must be a host that actually serves TLS: crawlers fetch og:image over the
+ * wire, so pointing this at a domain that merely looks right — runbar.app,
+ * which is registered but parked with no certificate — silently breaks every
+ * unfurl while the page itself looks perfectly fine.
+ */
+const SITE_URL =
+  process.env.NEXT_PUBLIC_SITE_URL ?? "https://getrunbar.app";
 
 const DESCRIPTION =
   "A native macOS menu-bar monitor for GitHub Actions, Vercel, and Cloudflare Pages — across every repo you already have checked out, with zero manual configuration.";
