@@ -458,6 +458,14 @@ export default async function Image() {
               0.055,
             )} 1px, transparent 1px)`,
             backgroundSize: "56px 56px",
+            /*
+             * Centre the lattice rather than let it start at 0,0. 1200 holds 21
+             * whole 56px cells with 24px over and 630 holds 11 with 14 over, so
+             * half of each remainder becomes the offset — the outer margin then
+             * matches on both sides instead of running flush left and leaving a
+             * 24px gutter on the right.
+             */
+            backgroundPosition: "12px 7px",
           }}
         />
 
