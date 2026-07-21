@@ -1,27 +1,34 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { ImageResponse } from "next/og";
+import { readFile, writeFile } from "node:fs/promises";
+// `next/og` (no extension) only resolves through the Next bundler's alias; this
+// script runs in plain Node, where the real file has to be named.
+import { ImageResponse } from "next/og.js";
 
 /*
- * The social card: the hero, rendered as a still.
+ * Generates public/og.png — the social card: the hero, rendered as a still.
  *
- * Copy left, the menu-bar panel right, on the same faint engineering grid —
- * so an unfurled link and the page a click later are recognisably one thing.
- * The panel is drawn at its real metrics (420px wide, the 12.5/10.5/9.5 type
+ * Run it with `pnpm og` from site/, and commit the result. This is a manual
+ * step on purpose: the card changes maybe once a year, and a committed PNG is
+ * a plain static asset with no Satori, no font tracing, and no image
+ * generation anywhere in the request or build path.
+ *
+ * ⚠ Editing this file does nothing on its own. Re-run `pnpm og` and commit the
+ * PNG, or the deployed card stays whatever it was.
+ *
+ * Copy left, the menu-bar panel right, on the same faint engineering grid — so
+ * an unfurled link and the page a click later are recognisably one thing. The
+ * panel is drawn at its real metrics (420px wide, the 12.5/10.5/9.5 type
  * ladder, the 20/10/9/7 radii) rather than a scaled-up impression of it, which
  * is why the numbers below match panel.module.css line for line. Its type is
  * genuinely tiny at feed size — it reads as UI texture there, and as the actual
  * product to anyone who opens the image.
  *
  * Nothing here carries a version or a release size. Social platforms cache
- * og:image hard, and this PNG is baked once at build, so anything that changes
- * per release would be a lie by the second release after a crawl.
+ * og:image hard and this file is committed, so anything that changes per
+ * release would be a lie by the second release after a crawl.
  */
 
-export const alt =
-  "Runbar — a native macOS menu-bar monitor for GitHub Actions, Vercel, and Cloudflare Pages";
-export const size = { width: 1200, height: 630 };
-export const contentType = "image/png";
+const OUTPUT = "public/og.png";
+const size = { width: 1200, height: 630 };
 
 /* ----------------------------------------------------------------- tokens -- */
 
@@ -59,14 +66,10 @@ const MONO = "JetBrains Mono";
  * fallbacks already declared in --font-sans / --font-mono, subsetted to the
  * characters used here — ~30KB each instead of ~300KB.
  *
- * Read off disk rather than through the `new URL(..., import.meta.url)` + fetch
- * pattern in the Next docs: under Turbopack that resolves to a `file:` URL, and
- * undici's fetch rejects those outright. This route renders at build time, where
- * cwd is the project root; next.config.ts traces the directory so the fonts are
- * also there if a deploy ever renders it at runtime.
+ * Resolved against this file rather than cwd so the script works from anywhere.
  */
 const font = (file: string) =>
-  readFile(join(process.cwd(), "assets", "fonts", file));
+  readFile(new URL(`../assets/fonts/${file}`, import.meta.url));
 
 /* ------------------------------------------------------------------ icons -- */
 
@@ -416,14 +419,14 @@ function FooterButton({ d }: { d: string }) {
 
 /* -------------------------------------------------------------------- card -- */
 
-export default async function Image() {
+async function render() {
   const [regular, semibold, mono] = await Promise.all([
     font("Inter-Regular.ttf"),
     font("Inter-SemiBold.ttf"),
     font("JetBrainsMono-Medium.ttf"),
   ]);
 
-  return new ImageResponse(
+  const image = new ImageResponse(
     (
       <div
         style={{
@@ -895,4 +898,19 @@ export default async function Image() {
       ],
     },
   );
+
+  const target = new URL(`../${OUTPUT}`, import.meta.url);
+  const png = Buffer.from(await image.arrayBuffer());
+  await writeFile(target, png);
+
+  console.log(
+    `${OUTPUT} — ${size.width}×${size.height}, ${(png.length / 1024).toFixed(
+      1,
+    )}KB`,
+  );
 }
+
+render().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

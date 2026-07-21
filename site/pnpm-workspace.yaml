@@ -1,2 +1,7 @@
 allowBuilds:
+  # esbuild arrives via tsx, which only `pnpm og` uses. Recent esbuild ships the
+  # platform binary as an optional dependency, so its postinstall has nothing
+  # left to fetch — `tsx` runs correctly with the script declined, and declining
+  # keeps an install-time script out of the tree for a dev-only tool.
+  esbuild: false
   sharp: true

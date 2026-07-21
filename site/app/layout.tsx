@@ -8,6 +8,19 @@ const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://runbar.app";
 const DESCRIPTION =
   "A native macOS menu-bar monitor for GitHub Actions, Vercel, and Cloudflare Pages — across every repo you already have checked out, with zero manual configuration.";
 
+/*
+ * Committed by `pnpm og` (scripts/render-og.tsx), not generated at build time.
+ * The query is a manual cache-buster: a static path has no content hash, and
+ * every social platform caches og:image by URL — bump it when the PNG changes
+ * or crawlers will keep serving the old card indefinitely.
+ */
+const OG_IMAGE = {
+  url: "/og.png?v=1",
+  width: 1200,
+  height: 630,
+  alt: "Runbar — a native macOS menu-bar monitor for GitHub Actions, Vercel, and Cloudflare Pages",
+};
+
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: "Runbar — CI in your menu bar, one second after push",
@@ -27,11 +40,13 @@ export const metadata: Metadata = {
     siteName: "Runbar",
     title: "Runbar — CI in your menu bar, one second after push",
     description: DESCRIPTION,
+    images: [OG_IMAGE],
   },
   twitter: {
     card: "summary_large_image",
     title: "Runbar — CI in your menu bar, one second after push",
     description: DESCRIPTION,
+    images: [OG_IMAGE],
   },
 };
 
