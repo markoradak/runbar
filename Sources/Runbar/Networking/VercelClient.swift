@@ -45,13 +45,41 @@ struct VercelClient: ExternalProviderClient {
             })
         }
 
+        // The status card reports how many projects the token can see. Recent
+        // deployments only cover the one or two projects that were just deployed,
+        // so counting *those* (as this client used to) shows "1 project" for an
+        // account with dozens. Page through the real projects list per scope and
+        // union the IDs so a project visible in both the personal and a team
+        // scope is counted once.
+        var projectIDs: Set<String> = []
+        for scope in scopes {
+            var from: String?
+            for _ in 0 ..< 50 {
+                var query = [URLQueryItem(name: "limit", value: "100")]
+                if let id = scope.id { query.append(URLQueryItem(name: "teamId", value: id)) }
+                if let from { query.append(URLQueryItem(name: "from", value: from)) }
+                let result: ProviderHTTPResult<VercelProjectsEnvelope> = try await get(
+                    path: "/v9/projects",
+                    query: query,
+                    token: token
+                )
+                lastRateLimit = result.rateLimit
+                let known = projectIDs.count
+                projectIDs.formUnion(result.value.projects.map(\.id))
+                // Stop at the last page, or if a page adds nothing new (guards a
+                // cursor that fails to advance).
+                guard let next = result.value.pagination?.next, projectIDs.count > known else { break }
+                from = next
+            }
+        }
+
         let deduplicated = Dictionary(grouping: executions, by: \.externalID)
             .compactMap { $0.value.max(by: { $0.updatedAt < $1.updatedAt }) }
         return ProviderFetchResult(
             provider: .vercel,
             accountLabel: user.user.username ?? user.user.email ?? "Vercel",
             executions: deduplicated,
-            projectCount: Set(deduplicated.map(\.projectKey)).count,
+            projectCount: projectIDs.count,
             rateLimit: lastRateLimit,
             fetchedAt: now()
         )
@@ -177,6 +205,33 @@ private struct VercelTeam: Decodable, Sendable {
     let id: String
     let slug: String?
     let name: String?
+}
+
+private struct VercelProjectsEnvelope: Decodable, Sendable {
+    let projects: [VercelProject]
+    let pagination: VercelPagination?
+}
+
+private struct VercelProject: Decodable, Sendable {
+    let id: String
+}
+
+private struct VercelPagination: Decodable, Sendable {
+    let next: String?
+
+    private enum CodingKeys: String, CodingKey { case next }
+
+    // Vercel returns `next` as a millisecond timestamp on some endpoints and an
+    // opaque continuation token on others; accept either and stringify it so it
+    // can be handed back as the `from` query parameter.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let number = try? container.decode(Int64.self, forKey: .next) {
+            next = String(number)
+        } else {
+            next = try? container.decode(String.self, forKey: .next)
+        }
+    }
 }
 
 private struct VercelDeploymentsEnvelope: Decodable, Sendable {

@@ -13,7 +13,14 @@ final class ExternalProviderClientTests: XCTestCase {
             ),
             .json(
                 #"{"deployments":[{"uid":"dpl_ready","name":"docs","url":"docs.vercel.app","created":900000,"buildingAt":901000,"ready":905000,"state":"READY","readyState":"READY","projectId":"prj_docs","target":"preview","meta":{"githubCommitOrg":"owner","githubCommitRepo":"docs","githubCommitSha":"def","githubCommitRef":"feature"}}]}"#
-            )
+            ),
+            // Personal projects, paginated: page one hands back a continuation
+            // cursor, page two ends it. The count must reflect every project —
+            // not just the two that show up in recent deployments.
+            .json(#"{"projects":[{"id":"prj_site"},{"id":"prj_alpha"},{"id":"prj_beta"}],"pagination":{"count":3,"next":1699999999}}"#),
+            .json(#"{"projects":[{"id":"prj_gamma"}],"pagination":{"count":1,"next":null}}"#),
+            // Team projects.
+            .json(#"{"projects":[{"id":"prj_docs"},{"id":"prj_delta"}],"pagination":{"count":2,"next":null}}"#)
         ])
         let client = VercelClient(
             transport: transport,
@@ -25,7 +32,8 @@ final class ExternalProviderClientTests: XCTestCase {
 
         XCTAssertEqual(result.provider, .vercel)
         XCTAssertEqual(result.accountLabel, "marco")
-        XCTAssertEqual(result.projectCount, 2)
+        // 6 distinct projects across both scopes, though only 2 were deployed.
+        XCTAssertEqual(result.projectCount, 6)
         XCTAssertEqual(result.executions.count, 2)
         let building = try XCTUnwrap(result.executions.first(where: { $0.externalID == "dpl_build" }))
         XCTAssertEqual(building.status, "in_progress")
@@ -39,13 +47,30 @@ final class ExternalProviderClientTests: XCTestCase {
         XCTAssertEqual(ready.conclusion, "success")
 
         let requests = await transport.requests()
-        XCTAssertEqual(requests.count, 4)
+        // user, teams, deployments×2 scopes, then projects (personal paginates
+        // into 2 pages, team 1 page) = 7 requests.
+        XCTAssertEqual(requests.count, 7)
         XCTAssertTrue(requests.allSatisfy {
             $0.value(forHTTPHeaderField: "Authorization") == "Bearer secret-vercel-token"
         })
         XCTAssertNil(URLComponents(url: requests[2].url!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "teamId" }))
         XCTAssertEqual(
             URLComponents(url: requests[3].url!, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "teamId" })?.value,
+            "team_1"
+        )
+        // Project count pages through /v9/projects: page two of the personal
+        // scope must carry the continuation cursor from page one as `from`, and
+        // the team scope must be requested with its teamId.
+        XCTAssertTrue(requests[4].url!.path.hasSuffix("/v9/projects"))
+        XCTAssertNil(URLComponents(url: requests[4].url!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "from" }))
+        XCTAssertEqual(
+            URLComponents(url: requests[5].url!, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "from" })?.value,
+            "1699999999"
+        )
+        XCTAssertEqual(
+            URLComponents(url: requests[6].url!, resolvingAgainstBaseURL: false)?
                 .queryItems?.first(where: { $0.name == "teamId" })?.value,
             "team_1"
         )
@@ -58,7 +83,8 @@ final class ExternalProviderClientTests: XCTestCase {
         let transport = ProviderMockTransport(responses: [
             .json(#"{"user":{"username":"marco","email":"m@example.com"}}"#),
             .json(#"{"teams":[]}"#),
-            .json(#"{"deployments":[{"uid":"dpl_skipped","name":"landing","created":1000000,"state":"CANCELED","readyState":"CANCELED","projectId":"prj_landing","target":"production","meta":{"githubCommitOrg":"owner","githubCommitRepo":"monorepo","githubCommitRef":"main","githubCommitMessage":"unrelated change"}},{"uid":"dpl_realcancel","name":"landing","created":2000000,"buildingAt":2001000,"ready":2002000,"state":"CANCELED","readyState":"CANCELED","projectId":"prj_landing","target":"production","meta":{"githubCommitOrg":"owner","githubCommitRepo":"monorepo","githubCommitRef":"main","githubCommitMessage":"canceled mid-build"}}]}"#)
+            .json(#"{"deployments":[{"uid":"dpl_skipped","name":"landing","created":1000000,"state":"CANCELED","readyState":"CANCELED","projectId":"prj_landing","target":"production","meta":{"githubCommitOrg":"owner","githubCommitRepo":"monorepo","githubCommitRef":"main","githubCommitMessage":"unrelated change"}},{"uid":"dpl_realcancel","name":"landing","created":2000000,"buildingAt":2001000,"ready":2002000,"state":"CANCELED","readyState":"CANCELED","projectId":"prj_landing","target":"production","meta":{"githubCommitOrg":"owner","githubCommitRepo":"monorepo","githubCommitRef":"main","githubCommitMessage":"canceled mid-build"}}]}"#),
+            .json(#"{"projects":[{"id":"prj_landing"}],"pagination":{"count":1,"next":null}}"#)
         ])
         let client = VercelClient(
             transport: transport,
