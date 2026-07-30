@@ -47,6 +47,42 @@ final class RepoDiscoveryIntegrationTests: XCTestCase {
         XCTAssertEqual(snapshot.repositories.first { $0.id == "remote/only" }?.source, .remote)
         XCTAssertEqual(persistedSnapshot, snapshot)
     }
+
+    func testDeniedRepositoryListedByInstallationFeedIsRestored() async throws {
+        let store = MemoryRepoDiscoveryStore(
+            codeRootPath: nil,
+            preferences: [
+                "remote/denied": RepositoryPreference(
+                    isExcluded: false,
+                    isAccessible: false,
+                    accessDeniedAt: Date(timeIntervalSince1970: 1_700_000_000),
+                    accessDenialCount: 3
+                ),
+                "remote/still-denied": RepositoryPreference(isExcluded: false, isAccessible: false)
+            ]
+        )
+        let remote = RemoteRepositoryDiscoveryStub(
+            repositories: [
+                RemoteRepository(identity: RepoIdentity(owner: "remote", name: "denied"), pushedAt: nil)
+            ]
+        )
+        let discovery = RepoDiscovery(remoteDiscovery: remote, store: store)
+
+        let snapshot = try await discovery.refresh(token: "token")
+        let preferences = try await discovery.repositoryPreferences()
+
+        // Presence in the installation feed restores access and clears backoff…
+        XCTAssertEqual(snapshot.repositories.first { $0.id == "remote/denied" }?.isAccessible, true)
+        XCTAssertEqual(
+            preferences["remote/denied"],
+            RepositoryPreference(isExcluded: false, isAccessible: true)
+        )
+        // …but absence proves nothing, so the other repository stays denied.
+        XCTAssertEqual(
+            preferences["remote/still-denied"],
+            RepositoryPreference(isExcluded: false, isAccessible: false)
+        )
+    }
 }
 
 private actor RemoteRepositoryDiscoveryStub: RemoteRepositoryDiscovering {
@@ -67,11 +103,12 @@ private actor RemoteRepositoryDiscoveryStub: RemoteRepositoryDiscovering {
 
 private actor MemoryRepoDiscoveryStore: RepoDiscoveryStoring {
     private var rootPath: String?
-    private var preferences: [String: RepositoryPreference] = [:]
+    private var preferences: [String: RepositoryPreference]
     private var snapshot: RepoDiscoverySnapshot?
 
-    init(codeRootPath: String?) {
+    init(codeRootPath: String?, preferences: [String: RepositoryPreference] = [:]) {
         rootPath = codeRootPath
+        self.preferences = preferences
     }
 
     func codeRootPath() async throws -> String? { rootPath }
@@ -87,6 +124,10 @@ private actor MemoryRepoDiscoveryStore: RepoDiscoveryStoring {
     func setAccessible(_ isAccessible: Bool, repositoryKey: String) async throws {
         var preference = preferences[repositoryKey] ?? .defaults
         preference.isAccessible = isAccessible
+        if isAccessible {
+            preference.accessDeniedAt = nil
+            preference.accessDenialCount = 0
+        }
         preferences[repositoryKey] = preference
     }
 

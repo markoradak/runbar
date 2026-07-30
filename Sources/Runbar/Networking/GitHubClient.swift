@@ -93,14 +93,18 @@ actor GitHubClient {
         }
     }
 
+    /// `bypassAccessGate` skips the local "marked inaccessible" precheck so
+    /// access-retry probes can reach GitHub for a verdict; a denied response
+    /// still re-marks the repository through `markAccessDenied`.
     func get<Response: Decodable & Sendable>(
         _ responseType: Response.Type,
         endpoint: GitHubEndpoint,
         token: String,
-        repositoryKey: String? = nil
+        repositoryKey: String? = nil,
+        bypassAccessGate: Bool = false
     ) async throws -> GitHubResponse<Response> {
         guard !token.isEmpty else { throw GitHubClientError.authentication }
-        if let repositoryKey {
+        if let repositoryKey, !bypassAccessGate {
             do {
                 guard try await store.isRepositoryAccessible(repositoryKey) else {
                     throw GitHubClientError.accessDenied(repositoryKey: repositoryKey, firstNotice: false)
@@ -352,7 +356,7 @@ actor GitHubClient {
     ) async -> GitHubClientError {
         let firstNotice: Bool
         do {
-            firstNotice = try await store.markRepositoryInaccessible(repositoryKey)
+            firstNotice = try await store.markRepositoryInaccessible(repositoryKey, deniedAt: now())
         } catch {
             await record(
                 url: url,

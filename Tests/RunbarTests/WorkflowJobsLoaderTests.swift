@@ -124,7 +124,7 @@ private actor JobsMemoryGitHubStore: GitHubClientStoring {
     }
 
     func isRepositoryAccessible(_ repositoryKey: String) async throws -> Bool { true }
-    func markRepositoryInaccessible(_ repositoryKey: String) async throws -> Bool { true }
+    func markRepositoryInaccessible(_ repositoryKey: String, deniedAt: Date) async throws -> Bool { true }
     func setRepositoryAccessible(_ isAccessible: Bool, repositoryKey: String) async throws {}
     func appendDebugEntry(_ entry: GitHubDebugEntry) async throws {}
     func clearDebugEntries() async throws {}

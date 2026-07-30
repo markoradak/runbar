@@ -58,6 +58,13 @@ Per-repo 403/404 (an App installation is scoped per resource owner; repos in org
 installation return these) marks the repo inaccessible once, surfaces it in Settings with a
 retry action, and stops polling it. Backoff on 403/429 respects `retry-after`.
 
+Denied repos recover in two ways without the manual retry. Discovery restores any denied repo
+that reappears in the installation-repositories feed — presence there is authoritative, absence
+proves nothing (the remote list is capped). Everything else gets probed automatically on a
+capped backoff (1h → 6h → daily per consecutive denial, `RepositoryAccessRetryPolicy`), driven
+from the launch, periodic-refresh, and wake paths; probes bypass the local access gate so GitHub
+delivers the verdict, and a denied probe just re-stamps the backoff without re-notifying.
+
 ### Poll scheduler (`Polling/PollScheduler.swift`)
 
 Each repo sits in exactly one tier:

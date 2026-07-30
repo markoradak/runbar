@@ -32,7 +32,9 @@ enum SQLiteSchema {
         CREATE TABLE IF NOT EXISTS repo_preferences (
             repo_key TEXT PRIMARY KEY NOT NULL,
             excluded INTEGER NOT NULL DEFAULT 0,
-            accessible INTEGER NOT NULL DEFAULT 1
+            accessible INTEGER NOT NULL DEFAULT 1,
+            access_denied_at REAL,
+            access_denial_count INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS repos (
@@ -203,6 +205,10 @@ enum SQLiteSchema {
         let additions: [(table: String, column: String, ddl: String)] = [
             ("repos", "current_sha",
              "ALTER TABLE repos ADD COLUMN current_sha TEXT"),
+            ("repo_preferences", "access_denied_at",
+             "ALTER TABLE repo_preferences ADD COLUMN access_denied_at REAL"),
+            ("repo_preferences", "access_denial_count",
+             "ALTER TABLE repo_preferences ADD COLUMN access_denial_count INTEGER NOT NULL DEFAULT 0"),
             ("git_watcher_debug", "reference_storage_before",
              "ALTER TABLE git_watcher_debug ADD COLUMN reference_storage_before TEXT NOT NULL DEFAULT 'none'"),
             ("provider_runs", "preview_url",

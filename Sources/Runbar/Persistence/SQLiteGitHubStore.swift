@@ -73,25 +73,31 @@ actor SQLiteGitHubStore: GitHubClientStoring, SQLiteBacked {
         return sqlite3_column_int(statement, 0) != 0
     }
 
-    func markRepositoryInaccessible(_ repositoryKey: String) async throws -> Bool {
+    func markRepositoryInaccessible(_ repositoryKey: String, deniedAt: Date) async throws -> Bool {
         let wasAccessible = try await isRepositoryAccessible(repositoryKey)
-        guard wasAccessible else { return false }
 
+        // Repeat denials (failed access probes) re-stamp the timestamp and grow
+        // the counter so RepositoryAccessRetryPolicy backs off further each time.
         let statement = try prepare(
             """
-            INSERT INTO repo_preferences(repo_key, excluded, accessible) VALUES(?, 0, 0)
-            ON CONFLICT(repo_key) DO UPDATE SET accessible = 0
+            INSERT INTO repo_preferences(repo_key, excluded, accessible, access_denied_at, access_denial_count)
+            VALUES(?, 0, 0, ?, 1)
+            ON CONFLICT(repo_key) DO UPDATE SET
+                accessible = 0,
+                access_denied_at = excluded.access_denied_at,
+                access_denial_count = repo_preferences.access_denial_count + 1
             """
         )
         defer { sqlite3_finalize(statement) }
         bind(repositoryKey, to: statement, index: 1)
+        sqlite3_bind_double(statement, 2, deniedAt.timeIntervalSince1970)
         try stepDone(statement)
 
         let repository = try prepare("UPDATE repos SET accessible = 0 WHERE repo_key = ?")
         defer { sqlite3_finalize(repository) }
         bind(repositoryKey, to: repository, index: 1)
         try stepDone(repository)
-        return true
+        return wasAccessible
     }
 
     func setRepositoryAccessible(_ isAccessible: Bool, repositoryKey: String) async throws {
@@ -105,6 +111,15 @@ actor SQLiteGitHubStore: GitHubClientStoring, SQLiteBacked {
         bind(repositoryKey, to: statement, index: 1)
         sqlite3_bind_int(statement, 2, isAccessible ? 1 : 0)
         try stepDone(statement)
+
+        if isAccessible {
+            let reset = try prepare(
+                "UPDATE repo_preferences SET access_denied_at = NULL, access_denial_count = 0 WHERE repo_key = ?"
+            )
+            defer { sqlite3_finalize(reset) }
+            bind(repositoryKey, to: reset, index: 1)
+            try stepDone(reset)
+        }
 
         let repository = try prepare("UPDATE repos SET accessible = ? WHERE repo_key = ?")
         defer { sqlite3_finalize(repository) }

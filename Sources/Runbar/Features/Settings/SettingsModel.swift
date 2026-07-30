@@ -266,6 +266,7 @@ final class SettingsModel: ObservableObject {
             state = .authenticated(login: user.login)
             Self.logger.notice("Restored authenticated GitHub login \(user.login, privacy: .public) from a Keychain credential")
             await refreshDiscovery(token: token)
+            await autoRetryDeniedRepositoryAccess()
         } catch {
             state = .failed(message: safeAuthMessage(error), hasStoredCredential: true)
             Self.logger.error("Stored GitHub credential validation failed")
@@ -476,6 +477,7 @@ final class SettingsModel: ObservableObject {
             return
         }
         await refreshDiscovery(token: token)
+        await autoRetryDeniedRepositoryAccess()
     }
 
     func setExcluded(_ isExcluded: Bool, for repository: DiscoveredRepository) async {
@@ -517,18 +519,21 @@ final class SettingsModel: ObservableObject {
         retryingRepositoryKeys.insert(repository.id)
         defer { retryingRepositoryKeys.remove(repository.id) }
         do {
-            try await githubClient.resetRepositoryAccess(repository.id)
-            try await repoDiscovery.setAccessible(true, repositoryKey: repository.id)
-            if let index = discoveredRepositories.firstIndex(where: { candidate in candidate.id == repository.id }) {
-                discoveredRepositories[index].isAccessible = true
-            }
+            // Probe through the bypassed gate first: access is only restored
+            // once GitHub confirms it, so a failed retry never flips the
+            // repository accessible in the meantime.
             _ = try await githubClient.get(
                 ActionsRunsProbe.self,
                 endpoint: .actionsRuns(repository: repository.identity),
                 token: token,
-                repositoryKey: repository.id
+                repositoryKey: repository.id,
+                bypassAccessGate: true
             )
-            repositoryAccessNotice = repository.identity.fullName + " is accessible again and will be monitored."
+            try await restoreRepositoryAccess(
+                repository,
+                repoDiscovery: repoDiscovery,
+                githubClient: githubClient
+            )
             await refreshDiscovery(token: token)
         } catch let error as GitHubClientError {
             if case .accessDenied = error {
@@ -536,13 +541,79 @@ final class SettingsModel: ObservableObject {
                     discoveredRepositories[index].isAccessible = false
                 }
                 repositoryAccessNotice = "GitHub still denies this repository. Add Runbar to that organization or repository, then retry."
-                await configureMonitoring()
             } else {
                 repositoryAccessNotice = error.userMessage
             }
         } catch {
             repositoryAccessNotice = "Runbar could not retry repository access."
         }
+    }
+
+    /// Probes repositories GitHub previously denied once their backoff window
+    /// elapses (1h → 6h → 24h per consecutive denial), restoring any the
+    /// Runbar GitHub App can reach again. Runs from the launch, periodic
+    /// refresh, and wake paths. Failed probes stay silent — each denial
+    /// re-stamps the backoff, so the next attempt just moves further out.
+    private func autoRetryDeniedRepositoryAccess() async {
+        guard let repoDiscovery, let githubClient, authenticatedLogin != nil else { return }
+        let denied = discoveredRepositories.filter { candidate in
+            !candidate.isExcluded && !candidate.isAccessible && !retryingRepositoryKeys.contains(candidate.id)
+        }
+        guard !denied.isEmpty else { return }
+        guard let preferences = try? await repoDiscovery.repositoryPreferences() else { return }
+        let now = Date()
+        let due = denied.filter { candidate in
+            guard let preference = preferences[candidate.id] else { return false }
+            return RepositoryAccessRetryPolicy.isRetryDue(preference: preference, now: now)
+        }
+        guard !due.isEmpty else { return }
+        guard let token = try? await credentialProvider.readCredential(), !token.isEmpty else { return }
+
+        var restoredAny = false
+        for repository in due {
+            retryingRepositoryKeys.insert(repository.id)
+            defer { retryingRepositoryKeys.remove(repository.id) }
+            do {
+                _ = try await githubClient.get(
+                    ActionsRunsProbe.self,
+                    endpoint: .actionsRuns(repository: repository.identity),
+                    token: token,
+                    repositoryKey: repository.id,
+                    bypassAccessGate: true
+                )
+                try await restoreRepositoryAccess(
+                    repository,
+                    repoDiscovery: repoDiscovery,
+                    githubClient: githubClient
+                )
+                restoredAny = true
+            } catch let error as GitHubClientError {
+                // Still denied: the client already extended the backoff. Any
+                // other failure (auth, rate limit, transport) ends this cycle.
+                if case .accessDenied = error { continue }
+                break
+            } catch {
+                break
+            }
+        }
+        if restoredAny {
+            selectDefaultVerificationRepositoryIfNeeded()
+            await configureMonitoring()
+            await refreshMenuBarRuns()
+        }
+    }
+
+    private func restoreRepositoryAccess(
+        _ repository: DiscoveredRepository,
+        repoDiscovery: RepoDiscovery,
+        githubClient: GitHubClient
+    ) async throws {
+        try await githubClient.resetRepositoryAccess(repository.id)
+        try await repoDiscovery.setAccessible(true, repositoryKey: repository.id)
+        if let index = discoveredRepositories.firstIndex(where: { candidate in candidate.id == repository.id }) {
+            discoveredRepositories[index].isAccessible = true
+        }
+        repositoryAccessNotice = repository.identity.fullName + " is accessible again and will be monitored."
     }
 
     func runETagVerification() async {
@@ -812,6 +883,7 @@ final class SettingsModel: ObservableObject {
                 guard !Task.isCancelled, let self else { return }
                 await self.pollScheduler?.handleWake()
                 await self.providerMonitor?.handleWake()
+                await self.autoRetryDeniedRepositoryAccess()
             }
         }
     }

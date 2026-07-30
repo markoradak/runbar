@@ -62,6 +62,23 @@ struct RemoteRepository: Hashable, Sendable {
 struct RepositoryPreference: Equatable, Sendable {
     var isExcluded: Bool
     var isAccessible: Bool
+    /// When GitHub last denied access (403/404) to this repository, and how
+    /// many times it has done so in a row. Both reset when access is restored;
+    /// the pair drives the automatic access-retry backoff.
+    var accessDeniedAt: Date?
+    var accessDenialCount: Int
+
+    init(
+        isExcluded: Bool,
+        isAccessible: Bool,
+        accessDeniedAt: Date? = nil,
+        accessDenialCount: Int = 0
+    ) {
+        self.isExcluded = isExcluded
+        self.isAccessible = isAccessible
+        self.accessDeniedAt = accessDeniedAt
+        self.accessDenialCount = accessDenialCount
+    }
 
     static let defaults = RepositoryPreference(isExcluded: false, isAccessible: true)
 }

@@ -27,7 +27,7 @@ actor RepoDiscovery {
 
     func refresh(token: String?) async throws -> RepoDiscoverySnapshot {
         let rootPath: String?
-        let preferences: [String: RepositoryPreference]
+        var preferences: [String: RepositoryPreference]
         do {
             rootPath = try await store.codeRootPath()
             preferences = try await store.repositoryPreferences()
@@ -47,6 +47,24 @@ actor RepoDiscovery {
             remoteRepositories = try await remoteDiscovery.discover(token: token)
         } else {
             remoteRepositories = []
+        }
+
+        // A repository listed by the GitHub App installation feed is accessible
+        // by definition, so a previously denied one that reappears is restored
+        // here without waiting for a retry probe. Presence only ever clears the
+        // flag — absence proves nothing, because discovery caps the remote list.
+        for repository in remoteRepositories {
+            let key = repository.identity.normalizedKey
+            guard preferences[key]?.isAccessible == false else { continue }
+            do {
+                try await store.setAccessible(true, repositoryKey: key)
+            } catch {
+                throw RepoDiscoveryError.persistence(String(describing: error))
+            }
+            preferences[key] = RepositoryPreference(
+                isExcluded: preferences[key]?.isExcluded ?? false,
+                isAccessible: true
+            )
         }
 
         let repositories = RepositoryMerger.merge(
@@ -78,6 +96,14 @@ actor RepoDiscovery {
     func setAccessible(_ isAccessible: Bool, repositoryKey: String) async throws {
         do {
             try await store.setAccessible(isAccessible, repositoryKey: repositoryKey)
+        } catch {
+            throw RepoDiscoveryError.persistence(String(describing: error))
+        }
+    }
+
+    func repositoryPreferences() async throws -> [String: RepositoryPreference] {
+        do {
+            return try await store.repositoryPreferences()
         } catch {
             throw RepoDiscoveryError.persistence(String(describing: error))
         }

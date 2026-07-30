@@ -257,6 +257,67 @@ final class GitHubClientTests: XCTestCase {
         }
     }
 
+    func testBypassedAccessGateProbesDeniedRepositoryAndStampsRepeatDenials() async throws {
+        let store = MemoryGitHubStore()
+        let transport = ScriptedGitHubTransport(steps: [
+            .response(status: 404, headers: rateHeaders(remaining: 4_800), body: Data()),
+            .response(status: 404, headers: rateHeaders(remaining: 4_799), body: Data()),
+            .response(
+                status: 200,
+                headers: rateHeaders(etag: "v1", remaining: 4_798),
+                body: payload
+            )
+        ])
+        let probeTime = Date(timeIntervalSince1970: 1_700_000_000)
+        let client = GitHubClient(
+            store: store,
+            transport: transport,
+            baseURL: baseURL,
+            now: { probeTime }
+        )
+
+        do {
+            _ = try await client.get(
+                TestPayload.self,
+                endpoint: endpoint,
+                token: "secret",
+                repositoryKey: "owner/probe"
+            )
+            XCTFail("Expected initial access denial")
+        } catch let error as GitHubClientError {
+            XCTAssertEqual(error, .accessDenied(repositoryKey: "owner/probe", firstNotice: true))
+        }
+
+        // A bypassed probe reaches GitHub instead of the local gate; a denial
+        // there re-marks the repository without re-triggering the first notice.
+        do {
+            _ = try await client.get(
+                TestPayload.self,
+                endpoint: endpoint,
+                token: "secret",
+                repositoryKey: "owner/probe",
+                bypassAccessGate: true
+            )
+            XCTFail("Expected probe denial")
+        } catch let error as GitHubClientError {
+            XCTAssertEqual(error, .accessDenied(repositoryKey: "owner/probe", firstNotice: false))
+        }
+        let stamps = await store.denialTimestamps(for: "owner/probe")
+        XCTAssertEqual(stamps, [probeTime, probeTime], "Each denial stamps the clock's time")
+
+        // A probe that succeeds returns normally so the caller can restore access.
+        let response = try await client.get(
+            TestPayload.self,
+            endpoint: endpoint,
+            token: "secret",
+            repositoryKey: "owner/probe",
+            bypassAccessGate: true
+        )
+        XCTAssertEqual(response.value.value, 42)
+        let requestCount = await transport.capturedRequests().count
+        XCTAssertEqual(requestCount, 3)
+    }
+
     func testExplicitAccessResetAllowsOneConditionalRetry() async throws {
         let store = MemoryGitHubStore()
         let transport = ScriptedGitHubTransport(steps: [
@@ -383,6 +444,7 @@ private struct TestPayload: Codable, Equatable, Sendable {
 private actor MemoryGitHubStore: GitHubClientStoring {
     private var cache: [String: GitHubCachedResponse]
     private var inaccessible: Set<String> = []
+    private var deniedTimestamps: [String: [Date]] = [:]
     private var debug: [GitHubDebugEntry] = []
 
     init(cache: [String: GitHubCachedResponse] = [:]) {
@@ -401,8 +463,13 @@ private actor MemoryGitHubStore: GitHubClientStoring {
         !inaccessible.contains(repositoryKey)
     }
 
-    func markRepositoryInaccessible(_ repositoryKey: String) async throws -> Bool {
-        inaccessible.insert(repositoryKey).inserted
+    func markRepositoryInaccessible(_ repositoryKey: String, deniedAt: Date) async throws -> Bool {
+        deniedTimestamps[repositoryKey, default: []].append(deniedAt)
+        return inaccessible.insert(repositoryKey).inserted
+    }
+
+    func denialTimestamps(for repositoryKey: String) -> [Date] {
+        deniedTimestamps[repositoryKey] ?? []
     }
 
     func setRepositoryAccessible(_ isAccessible: Bool, repositoryKey: String) async throws {

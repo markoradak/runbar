@@ -70,7 +70,7 @@ protocol GitHubClientStoring: Sendable {
     func cachedResponse(for canonicalURL: String) async throws -> GitHubCachedResponse?
     func saveCachedResponse(_ response: GitHubCachedResponse, for canonicalURL: String) async throws
     func isRepositoryAccessible(_ repositoryKey: String) async throws -> Bool
-    func markRepositoryInaccessible(_ repositoryKey: String) async throws -> Bool
+    func markRepositoryInaccessible(_ repositoryKey: String, deniedAt: Date) async throws -> Bool
     func setRepositoryAccessible(_ isAccessible: Bool, repositoryKey: String) async throws
     func appendDebugEntry(_ entry: GitHubDebugEntry) async throws
     func clearDebugEntries() async throws

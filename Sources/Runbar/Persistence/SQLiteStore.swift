@@ -42,14 +42,21 @@ actor SQLiteStore: RepoDiscoveryStoring, SQLiteBacked {
     }
 
     func repositoryPreferences() async throws -> [String: RepositoryPreference] {
-        let statement = try prepare("SELECT repo_key, excluded, accessible FROM repo_preferences")
+        let statement = try prepare(
+            "SELECT repo_key, excluded, accessible, access_denied_at, access_denial_count FROM repo_preferences"
+        )
         defer { sqlite3_finalize(statement) }
         var result: [String: RepositoryPreference] = [:]
         while sqlite3_step(statement) == SQLITE_ROW {
             guard let key = text(statement, column: 0) else { continue }
+            let deniedAt: Date? = sqlite3_column_type(statement, 3) == SQLITE_NULL
+                ? nil
+                : Date(timeIntervalSince1970: sqlite3_column_double(statement, 3))
             result[key] = RepositoryPreference(
                 isExcluded: sqlite3_column_int(statement, 1) != 0,
-                isAccessible: sqlite3_column_int(statement, 2) != 0
+                isAccessible: sqlite3_column_int(statement, 2) != 0,
+                accessDeniedAt: deniedAt,
+                accessDenialCount: Int(sqlite3_column_int(statement, 4))
             )
         }
         return result
@@ -89,6 +96,15 @@ actor SQLiteStore: RepoDiscoveryStoring, SQLiteBacked {
         bind(repositoryKey, to: statement, index: 2)
         sqlite3_bind_int(statement, 3, isAccessible ? 1 : 0)
         try stepDone(statement)
+
+        if isAccessible {
+            let reset = try prepare(
+                "UPDATE repo_preferences SET access_denied_at = NULL, access_denial_count = 0 WHERE repo_key = ?"
+            )
+            defer { sqlite3_finalize(reset) }
+            bind(repositoryKey, to: reset, index: 1)
+            try stepDone(reset)
+        }
 
         let snapshot = try prepare("UPDATE repos SET accessible = ? WHERE repo_key = ?")
         defer { sqlite3_finalize(snapshot) }
