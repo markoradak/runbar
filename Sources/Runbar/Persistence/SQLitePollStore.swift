@@ -20,6 +20,7 @@ actor SQLitePollStore: WorkflowRunStoring, PollSchedulerRecording, SQLiteBacked 
                 guard run.repositoryKey == repositoryKey else { throw GitHubClientError.persistence }
                 try upsert(run)
             }
+            try dropUnfinishedRuns(absentFrom: runs.map(\.id), for: repositoryKey)
             let cutoff = Date().addingTimeInterval(-30 * 24 * 60 * 60).timeIntervalSince1970
             let prune = try prepare("DELETE FROM runs WHERE created_at < ?")
             defer { sqlite3_finalize(prune) }
@@ -30,6 +31,36 @@ actor SQLitePollStore: WorkflowRunStoring, PollSchedulerRecording, SQLiteBacked 
             try? execute("ROLLBACK")
             throw error
         }
+    }
+
+    /// Clears runs this repository still has stored as unfinished but that the
+    /// poll no longer reports, so a run only stays "running" while GitHub keeps
+    /// listing it. A run deleted from the Actions UI — or pushed out of the 20
+    /// most recent by newer ones — otherwise sits in the menu spinning until the
+    /// 30-day prune, since the upsert above can only update rows the response
+    /// still mentions.
+    ///
+    /// Safe because the only caller polls the full 20-run page and hands over
+    /// everything it decoded; a 304 replays the cached body rather than an empty
+    /// list, so a revalidated poll re-affirms the in-flight runs instead of
+    /// erasing them. Deleting only the rows *missing* from the response (rather
+    /// than clearing and re-inserting) also leaves live runs untouched, so their
+    /// `menu_timer_debug` history is not cascaded away on every poll.
+    private func dropUnfinishedRuns(absentFrom ids: [Int64], for repositoryKey: String) throws {
+        let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ", ")
+        let keepClause = ids.isEmpty ? "" : " AND id NOT IN (\(placeholders))"
+        let statement = try prepare(
+            """
+            DELETE FROM runs
+            WHERE repo_key = ? AND status IN ('queued', 'in_progress')\(keepClause)
+            """
+        )
+        defer { sqlite3_finalize(statement) }
+        bind(repositoryKey, to: statement, index: 1)
+        for (offset, id) in ids.enumerated() {
+            sqlite3_bind_int64(statement, Int32(offset + 2), id)
+        }
+        try stepDone(statement)
     }
 
     func beginSchedulerSession(startedAt: Date, repositoryCount: Int) async throws -> Int64 {

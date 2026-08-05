@@ -148,6 +148,15 @@ response is re-inserted, so a run only stays "running" while the provider keeps 
 That covers the rows the first rule cannot — a deployment dropped at ingest (an auto-skipped one)
 or aged out of the fetch window would otherwise persist until the 30-day prune.
 
+`SQLitePollStore.saveWorkflowRuns` reconciles the same way for GitHub, since an upsert can only
+update rows the response still mentions: a run deleted from the Actions UI, or pushed out of the
+20 most recent by newer ones, would otherwise spin forever. It deletes only the unfinished rows
+*missing* from the response rather than clearing and re-inserting — `menu_timer_debug` cascades
+on `runs.id`, so clearing live rows each poll would discard the active run's timer history.
+Both reconcilers depend on their caller passing a complete response; on the GitHub side a 304
+replays the cached body rather than an empty list, so a revalidated poll re-affirms in-flight
+runs instead of erasing them.
+
 ### Menu bar UI (`Features/MenuBar/`)
 
 A window-style popover (`.menuBarExtraStyle(.window)`), not a native `NSMenu` — live timers,

@@ -128,6 +128,85 @@ final class SQLiteMenuBarStoreTests: XCTestCase {
         XCTAssertTrue(snapshot.recent.allSatisfy { $0.medianDurationSeconds == nil })
     }
 
+    /// A run GitHub stops listing — deleted from the Actions UI, or pushed out
+    /// of the 20 most recent — used to sit in the menu spinning until the 30-day
+    /// prune, because an upsert can only update rows the response still
+    /// mentions. Saving must reconcile it away, while leaving runs the response
+    /// still reports (and other repositories' runs) alone.
+    func testSaveClearsUnfinishedRunsGitHubNoLongerReports() async throws {
+        let databaseURL = temporaryDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: databaseURL.deletingLastPathComponent()) }
+
+        let repositoryStore = try SQLiteStore(path: databaseURL.path)
+        let pollStore = try SQLitePollStore(path: databaseURL.path)
+        let menuStore = try SQLiteMenuBarStore(path: databaseURL.path)
+        let repositories = [
+            repository(owner: "alpha", name: "one"),
+            repository(owner: "beta", name: "two")
+        ]
+        try await repositoryStore.saveDiscoverySnapshot(
+            RepoDiscoverySnapshot(codeRootPath: nil, repositories: repositories, skippedLocalRepositories: [])
+        )
+
+        let now = Date()
+        let vanishing = workflowRun(
+            id: 500, repository: repositories[0], status: "in_progress",
+            conclusion: nil, createdAt: now, sha: "gone"
+        )
+        let surviving = workflowRun(
+            id: 501, repository: repositories[0], status: "in_progress",
+            conclusion: nil, createdAt: now, sha: "still-going"
+        )
+        let otherRepo = workflowRun(
+            id: 502, repository: repositories[1], status: "in_progress",
+            conclusion: nil, createdAt: now, sha: "elsewhere"
+        )
+        try await pollStore.saveWorkflowRuns([vanishing, surviving], for: repositories[0].id)
+        try await pollStore.saveWorkflowRuns([otherRepo], for: repositories[1].id)
+        var running = try await menuStore.loadMenuBarRuns(recentLimit: 20).running
+        XCTAssertEqual(Set(running.map(\.id)), [500, 501, 502])
+
+        // Next poll of repo one no longer lists 500 at all.
+        try await pollStore.saveWorkflowRuns([surviving], for: repositories[0].id)
+
+        running = try await menuStore.loadMenuBarRuns(recentLimit: 20).running
+        XCTAssertFalse(running.map(\.id).contains(500), "a run GitHub stopped reporting must not stay running")
+        XCTAssertTrue(running.map(\.id).contains(501), "a run still reported must survive")
+        XCTAssertTrue(running.map(\.id).contains(502), "another repository's runs must be untouched")
+    }
+
+    /// Completed runs are history, not liveness: reconciliation must only touch
+    /// unfinished rows, or the Recent list would empty out as runs age past the
+    /// 20 the poll returns.
+    func testSaveKeepsCompletedRunsMissingFromTheResponse() async throws {
+        let databaseURL = temporaryDatabaseURL()
+        defer { try? FileManager.default.removeItem(at: databaseURL.deletingLastPathComponent()) }
+
+        let repositoryStore = try SQLiteStore(path: databaseURL.path)
+        let pollStore = try SQLitePollStore(path: databaseURL.path)
+        let menuStore = try SQLiteMenuBarStore(path: databaseURL.path)
+        let repo = repository(owner: "alpha", name: "one")
+        try await repositoryStore.saveDiscoverySnapshot(
+            RepoDiscoverySnapshot(codeRootPath: nil, repositories: [repo], skippedLocalRepositories: [])
+        )
+
+        let now = Date()
+        let older = workflowRun(
+            id: 600, repository: repo, status: "completed",
+            conclusion: "success", createdAt: now.addingTimeInterval(-600), sha: "older"
+        )
+        try await pollStore.saveWorkflowRuns([older], for: repo.id)
+        // A later poll has scrolled past it entirely.
+        let newer = workflowRun(
+            id: 601, repository: repo, status: "completed",
+            conclusion: "success", createdAt: now, sha: "newer"
+        )
+        try await pollStore.saveWorkflowRuns([newer], for: repo.id)
+
+        let recent = try await menuStore.loadMenuBarRuns(recentLimit: 20).recent
+        XCTAssertEqual(Set(recent.map(\.id)), [600, 601], "completed history must not be reconciled away")
+    }
+
     private func repository(owner: String, name: String) -> DiscoveredRepository {
         DiscoveredRepository(
             identity: RepoIdentity(owner: owner, name: name),
