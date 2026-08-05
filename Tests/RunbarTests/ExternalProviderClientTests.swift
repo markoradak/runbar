@@ -140,6 +140,55 @@ final class ExternalProviderClientTests: XCTestCase {
         XCTAssertTrue(requests[2].url!.path.contains("/accounts/acc_1/pages/projects"))
     }
 
+    /// Vercel stops a deployment before it builds when the account hits a plan
+    /// or spend limit. It never progresses and has no `buildingAt`, so mapping
+    /// it to a running state left it spinning in the Running section forever.
+    /// It must read as terminal — and stay visible, since the user has to act.
+    func testVercelBlockedDeploymentIsTerminalAndVisible() async throws {
+        let transport = ProviderMockTransport(responses: [
+            .json(#"{"user":{"username":"marco"}}"#),
+            .json(#"{"teams":[]}"#),
+            .json(#"{"projects":[{"id":"prj_landing"}]}"#),
+            .json(#"{"deployments":[{"uid":"dpl_blocked","name":"landing","created":1000000,"state":"BLOCKED","readyState":"BLOCKED","projectId":"prj_landing","target":"production","meta":{"githubCommitOrg":"owner","githubCommitRepo":"landing","githubCommitRef":"main","githubCommitMessage":"over the limit"}}]}"#)
+        ])
+        let client = VercelClient(
+            transport: transport,
+            baseURL: URL(string: "https://vercel.test")!,
+            now: { Date(timeIntervalSince1970: 3_000) }
+        )
+
+        let result = try await client.fetch(token: "secret-vercel-token")
+
+        let blocked = try XCTUnwrap(result.executions.first(where: { $0.externalID == "dpl_blocked" }))
+        XCTAssertEqual(blocked.status, "completed", "a blocked deployment must not read as running")
+        XCTAssertEqual(blocked.conclusion, "failure")
+    }
+
+    /// The fallback arm decides what happens to every state this client has not
+    /// been taught. Treating an unknown state as running is unrecoverable — it
+    /// spins forever — so it must land on a terminal state instead.
+    func testVercelUnknownStateIsTreatedAsFinishedNotRunning() async throws {
+        let transport = ProviderMockTransport(responses: [
+            .json(#"{"user":{"username":"marco"}}"#),
+            .json(#"{"teams":[]}"#),
+            .json(#"{"projects":[{"id":"prj_landing"}]}"#),
+            .json(#"{"deployments":[{"uid":"dpl_future","name":"landing","created":1000000,"state":"SOME_FUTURE_STATE","readyState":"SOME_FUTURE_STATE","projectId":"prj_landing","target":"production","meta":{"githubCommitOrg":"owner","githubCommitRepo":"landing","githubCommitRef":"main"}},{"uid":"dpl_queued","name":"landing","created":1000000,"state":"QUEUED","readyState":"QUEUED","projectId":"prj_landing","target":"production","meta":{"githubCommitOrg":"owner","githubCommitRepo":"landing","githubCommitRef":"main"}}]}"#)
+        ])
+        let client = VercelClient(
+            transport: transport,
+            baseURL: URL(string: "https://vercel.test")!,
+            now: { Date(timeIntervalSince1970: 3_000) }
+        )
+
+        let result = try await client.fetch(token: "secret-vercel-token")
+
+        let unknown = try XCTUnwrap(result.executions.first(where: { $0.externalID == "dpl_future" }))
+        XCTAssertEqual(unknown.status, "completed", "an unrecognized state must not spin forever")
+        // A genuinely queued deployment still reads as running.
+        let queued = try XCTUnwrap(result.executions.first(where: { $0.externalID == "dpl_queued" }))
+        XCTAssertEqual(queued.status, "queued")
+    }
+
     /// The account census — user, teams, and the project page walk — is every
     /// request a poll makes except the deployments, and none of it changes
     /// between polls. Re-walking it each time is what made a tight cadence

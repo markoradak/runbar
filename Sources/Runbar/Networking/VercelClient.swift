@@ -194,8 +194,23 @@ struct VercelClient: ExternalProviderClient {
         case "READY": ("completed", "success")
         case "ERROR": ("completed", "failure")
         case "CANCELED", "CANCELLED": ("completed", "cancelled")
+        // Vercel stopped these before they could build and will never resume
+        // them. BLOCKED is reported as a failure rather than dropped: it means
+        // the account hit a plan or spend limit, which is something the user has
+        // to act on — unlike SKIPPED and DELETED, which are self-explanatory and
+        // get dropped at ingest below when they never built.
+        case "BLOCKED": ("completed", "failure")
+        case "SKIPPED", "DELETED": ("completed", "cancelled")
         case "BUILDING": ("in_progress", nil)
-        default: ("queued", nil)
+        case "QUEUED", "INITIALIZING": ("queued", nil)
+        // Only the states above mean "still going". Anything else — a state
+        // Vercel adds later, or one this client has not learned yet — reads as
+        // finished. This arm used to fall through to "queued", so a deployment
+        // that would never progress spun in the Running section indefinitely; a
+        // BLOCKED one did exactly that for 90 minutes. Misreading a new
+        // in-flight state as finished corrects itself on the next poll, whereas
+        // misreading a terminal one as running never does.
+        default: ("completed", nil)
         }
     }
 

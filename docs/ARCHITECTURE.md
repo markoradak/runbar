@@ -135,10 +135,18 @@ inside one. What makes those cadences affordable is `VercelClient`'s account cen
 shape, not its activity, so they are walked once every 15 minutes rather than every poll. A warm
 poll costs one request per scope, so poll cost scales with scopes, not with cadence.
 
-Saving a fetch reconciles: unfinished rows for that provider are cleared before the response is
-re-inserted, so a run only stays "running" while the provider keeps reporting it. Without this,
-a deployment dropped at ingest (Vercel auto-skipping one via its ignored build step) or aged out
-of the fetch window strands a permanently "running" phantom until the 30-day prune.
+Two rules keep a finished deployment from spinning in the Running section forever. First, state
+mapping is a whitelist: only the states that genuinely mean "still going" (`QUEUED`,
+`INITIALIZING`, `BUILDING`) map to a running status, and anything unrecognized maps to finished.
+Vercel has terminal states that never build and so never progress — `BLOCKED` when the account
+hits a plan or spend limit, plus `SKIPPED` and `DELETED` — and a fallback that read unknown
+states as queued left them running indefinitely. Misreading a *new* in-flight state as finished
+self-corrects on the next poll; misreading a terminal one as running never does.
+
+Second, saving a fetch reconciles: unfinished rows for that provider are cleared before the
+response is re-inserted, so a run only stays "running" while the provider keeps reporting it.
+That covers the rows the first rule cannot — a deployment dropped at ingest (an auto-skipped one)
+or aged out of the fetch window would otherwise persist until the 30-day prune.
 
 ### Menu bar UI (`Features/MenuBar/`)
 
