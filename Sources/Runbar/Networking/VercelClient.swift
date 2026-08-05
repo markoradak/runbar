@@ -1,10 +1,20 @@
 import Foundation
 
 struct VercelClient: ExternalProviderClient {
+    /// How long the account census — who the token belongs to, which scopes it
+    /// can see, and how many projects that is — stays usable before it is walked
+    /// again. None of it changes between two polls minutes apart, but together
+    /// it is every request a poll makes except the deployments themselves:
+    /// `/v2/user`, `/v2/teams`, and up to 50 pages of `/v9/projects` per scope.
+    /// Caching it is what makes a tight poll cadence affordable — a warm poll
+    /// costs one request per scope instead of an entire account walk.
+    static let censusTTL: TimeInterval = 15 * 60
+
     let provider = ExecutionProvider.vercel
     private let transport: any ProviderTransport
     private let baseURL: URL
     private let now: @Sendable () -> Date
+    private let census = AccountCensusCache()
 
     init(
         transport: any ProviderTransport = URLSessionProviderTransport.live(),
@@ -17,21 +27,21 @@ struct VercelClient: ExternalProviderClient {
     }
 
     func fetch(token: String) async throws -> ProviderFetchResult {
-        let user: VercelUserEnvelope = try await get(path: "/v2/user", token: token).value
-        let teamsResponse: ProviderHTTPResult<VercelTeamsEnvelope> = try await get(
-            path: "/v2/teams",
-            query: [URLQueryItem(name: "limit", value: "100")],
-            token: token
-        )
-
-        let personal = VercelScope(id: nil, slug: user.user.username ?? user.user.email ?? "personal")
-        let scopes = [personal] + teamsResponse.value.teams.map {
-            VercelScope(id: $0.id, slug: $0.slug ?? $0.name ?? $0.id)
+        let account: VercelAccountCensus
+        if let cached = await census.value(token: token, at: now(), ttl: Self.censusTTL) {
+            account = cached
+        } else {
+            account = try await loadCensus(token: token)
+            await census.store(account, token: token, at: now())
         }
 
+        // The only per-poll work: the recent deployments in each scope. A warm
+        // census means a revoked token is no longer caught by `/v2/user` — the
+        // deployments call returns the same 401 and raises the same error, so
+        // nothing is lost but a request.
         var executions: [ProviderExecution] = []
-        var lastRateLimit = teamsResponse.rateLimit
-        for scope in scopes {
+        var lastRateLimit = ProviderRateLimit.unknown
+        for scope in account.scopes {
             var query = [URLQueryItem(name: "limit", value: "20")]
             if let id = scope.id { query.append(URLQueryItem(name: "teamId", value: id)) }
             let result: ProviderHTTPResult<VercelDeploymentsEnvelope> = try await get(
@@ -43,6 +53,33 @@ struct VercelClient: ExternalProviderClient {
             executions.append(contentsOf: result.value.deployments.compactMap {
                 execution(from: $0, scope: scope)
             })
+        }
+
+        let deduplicated = Dictionary(grouping: executions, by: \.externalID)
+            .compactMap { $0.value.max(by: { $0.updatedAt < $1.updatedAt }) }
+        return ProviderFetchResult(
+            provider: .vercel,
+            accountLabel: account.accountLabel,
+            executions: deduplicated,
+            projectCount: account.projectCount,
+            rateLimit: lastRateLimit,
+            fetchedAt: now()
+        )
+    }
+
+    /// Walks the account: who the token belongs to, every scope it can reach,
+    /// and how many distinct projects that adds up to.
+    private func loadCensus(token: String) async throws -> VercelAccountCensus {
+        let user: VercelUserEnvelope = try await get(path: "/v2/user", token: token).value
+        let teams: VercelTeamsEnvelope = try await get(
+            path: "/v2/teams",
+            query: [URLQueryItem(name: "limit", value: "100")],
+            token: token
+        ).value
+
+        let personal = VercelScope(id: nil, slug: user.user.username ?? user.user.email ?? "personal")
+        let scopes = [personal] + teams.teams.map {
+            VercelScope(id: $0.id, slug: $0.slug ?? $0.name ?? $0.id)
         }
 
         // The status card reports how many projects the token can see. Recent
@@ -63,7 +100,6 @@ struct VercelClient: ExternalProviderClient {
                     query: query,
                     token: token
                 )
-                lastRateLimit = result.rateLimit
                 let known = projectIDs.count
                 projectIDs.formUnion(result.value.projects.map(\.id))
                 // Stop at the last page, or if a page adds nothing new (guards a
@@ -73,15 +109,10 @@ struct VercelClient: ExternalProviderClient {
             }
         }
 
-        let deduplicated = Dictionary(grouping: executions, by: \.externalID)
-            .compactMap { $0.value.max(by: { $0.updatedAt < $1.updatedAt }) }
-        return ProviderFetchResult(
-            provider: .vercel,
+        return VercelAccountCensus(
             accountLabel: user.user.username ?? user.user.email ?? "Vercel",
-            executions: deduplicated,
-            projectCount: projectIDs.count,
-            rateLimit: lastRateLimit,
-            fetchedAt: now()
+            scopes: scopes,
+            projectCount: projectIDs.count
         )
     }
 
@@ -186,6 +217,37 @@ struct VercelClient: ExternalProviderClient {
 private struct VercelScope: Sendable {
     let id: String?
     let slug: String
+}
+
+/// The account shape behind a token: everything a poll needs that is not the
+/// deployments themselves.
+private struct VercelAccountCensus: Sendable {
+    let accountLabel: String
+    let scopes: [VercelScope]
+    let projectCount: Int
+}
+
+/// Holds the last census so `fetch` can skip re-walking the account. Keyed by a
+/// fingerprint rather than the token itself, so reconnecting with a different
+/// token re-walks instead of reporting the previous account's scopes, without
+/// keeping a second copy of the credential in memory.
+private actor AccountCensusCache {
+    private var fingerprint: Int?
+    private var census: VercelAccountCensus?
+    private var fetchedAt: Date?
+
+    func value(token: String, at now: Date, ttl: TimeInterval) -> VercelAccountCensus? {
+        guard let census, let fetchedAt, fingerprint == token.hashValue,
+              now.timeIntervalSince(fetchedAt) < ttl
+        else { return nil }
+        return census
+    }
+
+    func store(_ census: VercelAccountCensus, token: String, at now: Date) {
+        self.census = census
+        fingerprint = token.hashValue
+        fetchedAt = now
+    }
 }
 
 private struct VercelUserEnvelope: Decodable, Sendable {

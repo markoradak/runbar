@@ -21,6 +21,23 @@ actor SQLiteProviderStore: ProviderExecutionStoring, SQLiteBacked {
         }
         try execute("BEGIN IMMEDIATE TRANSACTION")
         do {
+            // Clear this provider's unfinished rows before re-inserting the
+            // fetch, so a run only stays "running" while the provider keeps
+            // reporting it. Anything the response no longer mentions is gone
+            // for good: either the client dropped it at ingest (Vercel
+            // auto-skipping a deployment via its ignored build step, which
+            // leaves a queued row that would otherwise never be updated again)
+            // or it aged out of the fetch window. Both used to strand a
+            // permanently "running" phantom in the menu until the 30-day prune.
+            // Rows still in flight are re-inserted by the upsert below with
+            // their current state, so this is a reconcile, not a delete.
+            let dropUnfinished = try prepare(
+                "DELETE FROM provider_runs WHERE provider = ? AND status IN ('queued', 'in_progress')"
+            )
+            defer { sqlite3_finalize(dropUnfinished) }
+            bind(provider.rawValue, to: dropUnfinished, index: 1)
+            try stepDone(dropUnfinished)
+
             for execution in executions { try upsert(execution) }
 
             // Drop any zero-duration cancelled deployments already stored for

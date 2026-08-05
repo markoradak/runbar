@@ -116,11 +116,29 @@ elapsed timer, no bar.
 
 Vercel and Cloudflare Pages deployments normalize into the same execution model and merge into
 the same UI. Shared HTTP layer (`ProviderHTTP`) handles auth headers, status validation, and
-rate-limit parsing. Neither API supports ETags, so instead of tiers the monitor uses a
-post-push hot window (15s), an active interval (60s), and an idle interval (300s); a 429's
-`Retry-After` is honored per provider, and remaining quota below 100 widens polling 4× —
-providers publish very different quota totals, so the threshold is absolute rather than
-GitHub's 500-of-5,000.
+rate-limit parsing. Neither API supports ETags, so instead of tiers the monitor uses a post-push
+burst that ramps 1s…9s and then holds at 10s for the rest of the hot window, a menu-open interval
+(5s), an active interval (30s), and an idle interval (60s); a 429's `Retry-After` is honored per
+provider, and remaining quota below 100 widens polling 4× — providers publish very different quota
+totals, so the threshold is absolute rather than GitHub's 500-of-5,000. Opening the menu resyncs
+immediately and then polls at the menu interval, and tightens whatever tier applies but never
+loosens it: a build running while the user watches is the case that most needs the fast cadence.
+
+The idle interval is the one that decides whether a deployment is ever seen *while it runs*.
+Unlike GitHub, which is polled per repository (so the aggregate cadence across many repos is
+dense), providers are polled account-wide on a single timer. The post-push burst only covers
+deployments a local push created — a dashboard redeploy, a CLI deploy, a PR merge, or a repo
+with no local clone produces no push signal at all, and is polled at exactly the idle rate.
+Provider builds routinely finish in 25-45s, so the idle interval must stay tight enough to land
+inside one. What makes those cadences affordable is `VercelClient`'s account census cache
+(`censusTTL`): `/v2/user`, `/v2/teams`, and the `/v9/projects` page walk describe the account
+shape, not its activity, so they are walked once every 15 minutes rather than every poll. A warm
+poll costs one request per scope, so poll cost scales with scopes, not with cadence.
+
+Saving a fetch reconciles: unfinished rows for that provider are cleared before the response is
+re-inserted, so a run only stays "running" while the provider keeps reporting it. Without this,
+a deployment dropped at ingest (Vercel auto-skipping one via its ignored build step) or aged out
+of the fetch window strands a permanently "running" phantom until the 30-day prune.
 
 ### Menu bar UI (`Features/MenuBar/`)
 

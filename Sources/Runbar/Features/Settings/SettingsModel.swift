@@ -686,6 +686,10 @@ final class SettingsModel: ObservableObject {
         acknowledgeRecentFailureIfNeeded()
         restartMenuBarTimerIfNeeded()
         logStreamer.setMenuBarVisible(true)
+        // Providers have no push channel, so an open menu is the only signal
+        // that their cadence should tighten; the monitor decides whether that
+        // also warrants an immediate resync.
+        Task { [providerMonitor] in await providerMonitor?.setMenuBarVisible(true) }
     }
 
     func menuBarDidDisappear() {
@@ -694,6 +698,7 @@ final class SettingsModel: ObservableObject {
         menuBarTimerTask?.cancel()
         menuBarTimerTask = nil
         logStreamer.setMenuBarVisible(false)
+        Task { [providerMonitor] in await providerMonitor?.setMenuBarVisible(false) }
     }
 
     /// Opening the menu counts as seeing the newest failure, so the menu bar

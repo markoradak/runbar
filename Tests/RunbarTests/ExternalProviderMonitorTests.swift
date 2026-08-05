@@ -90,9 +90,13 @@ final class ExternalProviderMonitorTests: XCTestCase {
         // and then wait a whole interval.
         _ = await monitor.handleLocalPush(repositoryKey: "owner/site")
         var scheduled = await monitor.scheduledInterval()
-        XCTAssertEqual(scheduled, .seconds(2))
+        let burst = ExternalProviderMonitor.localPushBurstIntervals
+        XCTAssertEqual(scheduled, .seconds(burst[0]))
 
-        for expected in [Duration.seconds(4), .seconds(8), ExternalProviderMonitor.hotInterval] {
+        // Each refresh spends one burst step; once they are gone the window
+        // holds at `hotInterval` until it expires.
+        let expectedSteps = burst.dropFirst().map { Duration.seconds($0) } + [ExternalProviderMonitor.hotInterval]
+        for expected in expectedSteps {
             await monitor.refreshAll()
             scheduled = await monitor.scheduledInterval()
             XCTAssertEqual(scheduled, expected)
@@ -152,7 +156,11 @@ final class ExternalProviderMonitorTests: XCTestCase {
 
         _ = await monitor.handleLocalPush(repositoryKey: "owner/site")
         let burstStep = await monitor.scheduledInterval()
-        XCTAssertEqual(burstStep, .seconds(2), "Push should start the burst")
+        XCTAssertEqual(
+            burstStep,
+            .seconds(ExternalProviderMonitor.localPushBurstIntervals[0]),
+            "Push should start the burst"
+        )
 
         // The deployment now shows up: the window closes and the cadence
         // reverts to the active-execution rate instead of burning the burst.
@@ -264,6 +272,109 @@ final class ExternalProviderMonitorTests: XCTestCase {
         XCTAssertEqual(interval, ExternalProviderMonitor.idleInterval * ExternalProviderMonitor.degradedIntervalMultiplier)
         let snapshot = await monitor.snapshot()
         XCTAssertTrue(snapshot.isRateLimitDegraded)
+    }
+
+    /// Providers get no push notification, so an open menu is the only hint
+    /// that their cadence should tighten. Opening fetches immediately and then
+    /// re-arms at the menu cadence, so the user sees current state on open
+    /// rather than whatever the last scheduled poll left behind.
+    func testOpenMenuFetchesImmediatelyThenPollsAtTheMenuCadence() async throws {
+        let clock = MutableClock(now: Date(timeIntervalSince1970: 5_000))
+        let client = SequencedExternalProviderClient(
+            provider: .vercel,
+            results: [],
+            fallback: .success(Self.fetchResult(remaining: 900, at: clock.now()))
+        )
+        let monitor = ExternalProviderMonitor(
+            clients: [client],
+            store: MemoryProviderExecutionStore(),
+            now: { clock.now() }
+        )
+        try await monitor.connect(provider: .vercel, token: "token")
+        let afterConnect = await client.fetchCount()
+
+        // Opening fetches right away, and the next poll is one menu interval out.
+        await monitor.setMenuBarVisible(true)
+        let afterOpen = await client.fetchCount()
+        let scheduled = await monitor.scheduledInterval()
+        XCTAssertEqual(afterOpen, afterConnect + 1, "opening the menu should resync immediately")
+        XCTAssertEqual(scheduled, ExternalProviderMonitor.menuOpenInterval)
+
+        // Closing returns to the idle floor without another fetch.
+        await monitor.setMenuBarVisible(false)
+        let closedInterval = await monitor.currentPollInterval()
+        let afterClose = await client.fetchCount()
+        XCTAssertEqual(closedInterval, ExternalProviderMonitor.idleInterval)
+        XCTAssertEqual(afterClose, afterOpen, "closing should not fetch")
+
+        // Every reopen fetches again.
+        await monitor.setMenuBarVisible(true)
+        let afterReopen = await client.fetchCount()
+        XCTAssertEqual(afterReopen, afterOpen + 1, "each open resyncs")
+    }
+
+    /// An open menu must tighten whatever tier applies, never loosen it — a
+    /// build running while the user watches is the case that most needs the
+    /// fast cadence, so the active tier must not override the menu one.
+    func testOpenMenuCadenceWinsOverTheActiveTier() async throws {
+        let now = Date(timeIntervalSince1970: 7_000)
+        let deployment = ProviderExecution(
+            provider: .vercel,
+            externalID: "dpl_running",
+            repository: RepoIdentity(owner: "owner", name: "site"),
+            projectKey: "team/site",
+            projectName: "site",
+            status: "in_progress",
+            conclusion: nil,
+            startedAt: now,
+            createdAt: now,
+            updatedAt: now,
+            headBranch: "main",
+            headSHA: "abc",
+            environment: "Production",
+            displayTitle: "Build",
+            webURL: "https://vercel.com/build"
+        )
+        let client = SequencedExternalProviderClient(
+            provider: .vercel,
+            results: [],
+            fallback: .success(
+                ProviderFetchResult(
+                    provider: .vercel,
+                    accountLabel: "Studio",
+                    executions: [deployment],
+                    projectCount: 1,
+                    rateLimit: ProviderRateLimit(remaining: 900, resetAt: nil),
+                    fetchedAt: now
+                )
+            )
+        )
+        let monitor = ExternalProviderMonitor(
+            clients: [client],
+            store: MemoryProviderExecutionStore(),
+            now: { now }
+        )
+        try await monitor.connect(provider: .vercel, token: "token")
+
+        let closedInterval = await monitor.currentPollInterval()
+        XCTAssertEqual(closedInterval, ExternalProviderMonitor.activeInterval)
+
+        await monitor.setMenuBarVisible(true)
+        let openInterval = await monitor.currentPollInterval()
+        XCTAssertEqual(openInterval, ExternalProviderMonitor.menuOpenInterval)
+    }
+
+    /// The idle floor is what decides whether a deployment nobody pushed for —
+    /// a dashboard redeploy, a CLI deploy, a repo with no local clone — is ever
+    /// seen while it runs. Vercel builds routinely finish in well under a
+    /// minute, so this must stay tight enough to land inside one.
+    func testIdleCadenceStaysTightEnoughToObserveAShortDeployment() {
+        XCTAssertLessThanOrEqual(
+            ExternalProviderMonitor.idleInterval,
+            .seconds(60),
+            "a longer idle interval lets sub-minute deployments start and finish between polls"
+        )
+        XCTAssertLessThanOrEqual(ExternalProviderMonitor.activeInterval, ExternalProviderMonitor.idleInterval)
     }
 
     private static func fetchResult(remaining: Int, at date: Date) -> ProviderFetchResult {

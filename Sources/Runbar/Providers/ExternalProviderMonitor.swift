@@ -11,15 +11,30 @@ actor ExternalProviderMonitor: LocalPushPolling {
     /// produces no deployment at all.
     static let hotWindowDuration: TimeInterval = 90
     /// A deployment appears a few seconds after the push, so a flat cadence
-    /// misses it by seconds and then waits a whole interval. Tighten instead,
-    /// mirroring `PollScheduler.localPushBurstIntervals`. Providers have no
-    /// conditional-request equivalent of GitHub's ETag 304s, so these polls
-    /// all consume quota — hence three steps rather than a longer ramp.
-    static let localPushBurstIntervals: [TimeInterval] = [2, 4, 8]
+    /// misses it by seconds and then waits a whole interval. Ramp instead,
+    /// starting at one second: the deployment usually lands within the first
+    /// few steps, and the window closes the moment it does, so the tail steps
+    /// are only ever paid by a push that produced no deployment at all.
+    /// `VercelClient` caches the account census, so a burst poll costs about
+    /// one request per scope rather than a full account walk.
+    static let localPushBurstIntervals: [TimeInterval] = [1, 2, 3, 4, 5, 6, 7, 8, 9]
     /// Cadence inside the hot window once the burst above is spent.
-    static let hotInterval: Duration = .seconds(15)
-    static let activeInterval: Duration = .seconds(60)
-    static let idleInterval: Duration = .seconds(300)
+    static let hotInterval: Duration = .seconds(10)
+    static let activeInterval: Duration = .seconds(30)
+    /// Cadence while the menu is open. The user is watching the list right now,
+    /// so this is the one place where near-live matters more than quota: a
+    /// deployment that starts, progresses, or finishes while they watch should
+    /// appear without them having to close and reopen the menu.
+    static let menuOpenInterval: Duration = .seconds(5)
+    /// The floor cadence, and the one that decides whether a deployment is ever
+    /// seen *while it runs*. The burst above only covers deployments a local
+    /// push created; a deploy from the provider's dashboard, its CLI, a PR
+    /// merge, or a repo with no local clone produces no push signal at all, so
+    /// it is polled at exactly this rate. Vercel builds routinely finish in
+    /// 25-45s, so a long idle interval means the deployment is created and
+    /// completed between two polls and only ever surfaces as an already-finished
+    /// run — the bug this value used to cause at 300s.
+    static let idleInterval: Duration = .seconds(60)
 
     /// Providers publish very different quota totals — Cloudflare allows about
     /// 1,200 requests per five minutes, Vercel's limits vary per endpoint — so
@@ -39,6 +54,8 @@ actor ExternalProviderMonitor: LocalPushPolling {
     private var hotWindowUntil: Date?
     /// Remaining post-push burst steps; see `localPushBurstIntervals`.
     private var localPushBurst: [TimeInterval] = []
+    /// True while the menu is open; tightens the cadence to `menuOpenInterval`.
+    private var isMenuBarVisible = false
     /// Execution IDs seen so far, per provider. The post-push window closes
     /// when an ID we have never seen appears; matching on identity rather than
     /// on `createdAt` keeps this immune to clock skew against the provider.
@@ -189,6 +206,22 @@ actor ExternalProviderMonitor: LocalPushPolling {
         await refreshAll()
     }
 
+    /// Opening the menu is the strongest signal that provider state matters
+    /// right now, so it always resyncs immediately rather than showing whatever
+    /// the last scheduled poll left behind. `refreshAll` re-arms the loop off
+    /// its own completion, so the next poll lands one `menuOpenInterval` after
+    /// this one returns: open, fetch now, fetch again 5s later, and so on until
+    /// the menu closes and the cadence relaxes.
+    func setMenuBarVisible(_ visible: Bool) async {
+        guard isMenuBarVisible != visible else { return }
+        isMenuBarVisible = visible
+        guard visible else {
+            restartLoop()
+            return
+        }
+        await refreshAll()
+    }
+
     /// Returns an execution's log lines (newest last) for failure display.
     func executionLogLines(
         provider: ExecutionProvider,
@@ -278,7 +311,11 @@ actor ExternalProviderMonitor: LocalPushPolling {
             guard let nextBurstStep = localPushBurst.first else { return Self.hotInterval }
             return .seconds(nextBurstStep)
         }
-        return snapshotValue.activeExecutionCount > 0 ? Self.activeInterval : Self.idleInterval
+        // An open menu tightens whatever tier applies but never loosens it —
+        // a build running *while* the user watches is the case that most needs
+        // the fast cadence, so the active tier must not override the menu one.
+        let base = snapshotValue.activeExecutionCount > 0 ? Self.activeInterval : Self.idleInterval
+        return isMenuBarVisible ? min(base, Self.menuOpenInterval) : base
     }
 
     /// True while any connected provider reports a small remaining quota.

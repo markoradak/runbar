@@ -5,22 +5,23 @@ import XCTest
 final class ExternalProviderClientTests: XCTestCase {
     func testVercelDiscoversPersonalAndTeamDeploymentsAndNormalizesStates() async throws {
         let transport = ProviderMockTransport(responses: [
+            // The account census comes first and is cached; deployments follow.
             .json(#"{"user":{"username":"marco","email":"m@example.com"}}"#),
             .json(#"{"teams":[{"id":"team_1","slug":"studio","name":"Studio"}]}"#),
-            .json(
-                #"{"deployments":[{"uid":"dpl_build","name":"site","url":"site-a.vercel.app","inspectorUrl":"https://vercel.com/marco/site/dpl_build","created":1000000,"buildingAt":1001000,"state":"BUILDING","readyState":"BUILDING","projectId":"prj_site","target":"production","meta":{"githubCommitOrg":"owner","githubCommitRepo":"site","githubCommitSha":"abc","githubCommitRef":"main","githubCommitMessage":"Ship it"}}]}"#,
-                headers: ["X-RateLimit-Remaining": "998", "X-RateLimit-Reset": "2000"]
-            ),
-            .json(
-                #"{"deployments":[{"uid":"dpl_ready","name":"docs","url":"docs.vercel.app","created":900000,"buildingAt":901000,"ready":905000,"state":"READY","readyState":"READY","projectId":"prj_docs","target":"preview","meta":{"githubCommitOrg":"owner","githubCommitRepo":"docs","githubCommitSha":"def","githubCommitRef":"feature"}}]}"#
-            ),
             // Personal projects, paginated: page one hands back a continuation
             // cursor, page two ends it. The count must reflect every project —
             // not just the two that show up in recent deployments.
             .json(#"{"projects":[{"id":"prj_site"},{"id":"prj_alpha"},{"id":"prj_beta"}],"pagination":{"count":3,"next":1699999999}}"#),
             .json(#"{"projects":[{"id":"prj_gamma"}],"pagination":{"count":1,"next":null}}"#),
             // Team projects.
-            .json(#"{"projects":[{"id":"prj_docs"},{"id":"prj_delta"}],"pagination":{"count":2,"next":null}}"#)
+            .json(#"{"projects":[{"id":"prj_docs"},{"id":"prj_delta"}],"pagination":{"count":2,"next":null}}"#),
+            .json(
+                #"{"deployments":[{"uid":"dpl_build","name":"site","url":"site-a.vercel.app","inspectorUrl":"https://vercel.com/marco/site/dpl_build","created":1000000,"buildingAt":1001000,"state":"BUILDING","readyState":"BUILDING","projectId":"prj_site","target":"production","meta":{"githubCommitOrg":"owner","githubCommitRepo":"site","githubCommitSha":"abc","githubCommitRef":"main","githubCommitMessage":"Ship it"}}]}"#
+            ),
+            .json(
+                #"{"deployments":[{"uid":"dpl_ready","name":"docs","url":"docs.vercel.app","created":900000,"buildingAt":901000,"ready":905000,"state":"READY","readyState":"READY","projectId":"prj_docs","target":"preview","meta":{"githubCommitOrg":"owner","githubCommitRepo":"docs","githubCommitSha":"def","githubCommitRef":"feature"}}]}"#,
+                headers: ["X-RateLimit-Remaining": "998", "X-RateLimit-Reset": "2000"]
+            )
         ])
         let client = VercelClient(
             transport: transport,
@@ -47,28 +48,30 @@ final class ExternalProviderClientTests: XCTestCase {
         XCTAssertEqual(ready.conclusion, "success")
 
         let requests = await transport.requests()
-        // user, teams, deployments×2 scopes, then projects (personal paginates
-        // into 2 pages, team 1 page) = 7 requests.
+        // user, teams, projects (personal paginates into 2 pages, team 1 page),
+        // then deployments×2 scopes = 7 requests.
         XCTAssertEqual(requests.count, 7)
         XCTAssertTrue(requests.allSatisfy {
             $0.value(forHTTPHeaderField: "Authorization") == "Bearer secret-vercel-token"
         })
-        XCTAssertNil(URLComponents(url: requests[2].url!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "teamId" }))
-        XCTAssertEqual(
-            URLComponents(url: requests[3].url!, resolvingAgainstBaseURL: false)?
-                .queryItems?.first(where: { $0.name == "teamId" })?.value,
-            "team_1"
-        )
         // Project count pages through /v9/projects: page two of the personal
         // scope must carry the continuation cursor from page one as `from`, and
         // the team scope must be requested with its teamId.
-        XCTAssertTrue(requests[4].url!.path.hasSuffix("/v9/projects"))
-        XCTAssertNil(URLComponents(url: requests[4].url!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "from" }))
+        XCTAssertTrue(requests[2].url!.path.hasSuffix("/v9/projects"))
+        XCTAssertNil(URLComponents(url: requests[2].url!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "from" }))
         XCTAssertEqual(
-            URLComponents(url: requests[5].url!, resolvingAgainstBaseURL: false)?
+            URLComponents(url: requests[3].url!, resolvingAgainstBaseURL: false)?
                 .queryItems?.first(where: { $0.name == "from" })?.value,
             "1699999999"
         )
+        XCTAssertEqual(
+            URLComponents(url: requests[4].url!, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "teamId" })?.value,
+            "team_1"
+        )
+        // Deployments: personal scope carries no teamId, the team scope does.
+        XCTAssertTrue(requests[5].url!.path.hasSuffix("/v6/deployments"))
+        XCTAssertNil(URLComponents(url: requests[5].url!, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "teamId" }))
         XCTAssertEqual(
             URLComponents(url: requests[6].url!, resolvingAgainstBaseURL: false)?
                 .queryItems?.first(where: { $0.name == "teamId" })?.value,
@@ -83,8 +86,8 @@ final class ExternalProviderClientTests: XCTestCase {
         let transport = ProviderMockTransport(responses: [
             .json(#"{"user":{"username":"marco","email":"m@example.com"}}"#),
             .json(#"{"teams":[]}"#),
-            .json(#"{"deployments":[{"uid":"dpl_skipped","name":"landing","created":1000000,"state":"CANCELED","readyState":"CANCELED","projectId":"prj_landing","target":"production","meta":{"githubCommitOrg":"owner","githubCommitRepo":"monorepo","githubCommitRef":"main","githubCommitMessage":"unrelated change"}},{"uid":"dpl_realcancel","name":"landing","created":2000000,"buildingAt":2001000,"ready":2002000,"state":"CANCELED","readyState":"CANCELED","projectId":"prj_landing","target":"production","meta":{"githubCommitOrg":"owner","githubCommitRepo":"monorepo","githubCommitRef":"main","githubCommitMessage":"canceled mid-build"}}]}"#),
-            .json(#"{"projects":[{"id":"prj_landing"}],"pagination":{"count":1,"next":null}}"#)
+            .json(#"{"projects":[{"id":"prj_landing"}],"pagination":{"count":1,"next":null}}"#),
+            .json(#"{"deployments":[{"uid":"dpl_skipped","name":"landing","created":1000000,"state":"CANCELED","readyState":"CANCELED","projectId":"prj_landing","target":"production","meta":{"githubCommitOrg":"owner","githubCommitRepo":"monorepo","githubCommitRef":"main","githubCommitMessage":"unrelated change"}},{"uid":"dpl_realcancel","name":"landing","created":2000000,"buildingAt":2001000,"ready":2002000,"state":"CANCELED","readyState":"CANCELED","projectId":"prj_landing","target":"production","meta":{"githubCommitOrg":"owner","githubCommitRepo":"monorepo","githubCommitRef":"main","githubCommitMessage":"canceled mid-build"}}]}"#)
         ])
         let client = VercelClient(
             transport: transport,
@@ -137,6 +140,71 @@ final class ExternalProviderClientTests: XCTestCase {
         XCTAssertTrue(requests[2].url!.path.contains("/accounts/acc_1/pages/projects"))
     }
 
+    /// The account census — user, teams, and the project page walk — is every
+    /// request a poll makes except the deployments, and none of it changes
+    /// between polls. Re-walking it each time is what made a tight cadence
+    /// unaffordable, so a second fetch inside the TTL must reuse it and request
+    /// only the deployments.
+    func testAccountCensusIsReusedWithinItsTTL() async throws {
+        let clock = MutableTestClock(now: Date(timeIntervalSince1970: 10_000))
+        let transport = ProviderMockTransport(responses: [
+            .json(#"{"user":{"username":"marco","email":"m@example.com"}}"#),
+            .json(#"{"teams":[]}"#),
+            .json(#"{"projects":[{"id":"prj_1"},{"id":"prj_2"}]}"#),
+            .json(#"{"deployments":[]}"#),
+            // Second fetch: deployments only.
+            .json(#"{"deployments":[]}"#)
+        ])
+        let client = VercelClient(
+            transport: transport,
+            baseURL: URL(string: "https://vercel.test")!,
+            now: { clock.now() }
+        )
+
+        let first = try await client.fetch(token: "secret-vercel-token")
+        XCTAssertEqual(first.projectCount, 2)
+        XCTAssertEqual(first.accountLabel, "marco")
+
+        clock.advance(by: VercelClient.censusTTL - 1)
+        let second = try await client.fetch(token: "secret-vercel-token")
+        XCTAssertEqual(second.projectCount, 2, "the cached census should still be reported")
+        XCTAssertEqual(second.accountLabel, "marco")
+
+        let paths = await transport.requests().map { $0.url!.path }
+        XCTAssertEqual(paths.filter { $0.contains("/v9/projects") }.count, 1, "projects paged once")
+        XCTAssertEqual(paths.filter { $0.contains("/v2/user") }.count, 1, "identity fetched once")
+        XCTAssertEqual(paths.filter { $0.contains("/v2/teams") }.count, 1, "scopes fetched once")
+        XCTAssertEqual(paths.filter { $0.contains("/v6/deployments") }.count, 2, "deployments every poll")
+    }
+
+    /// Reconnecting with a different token must re-walk rather than report the
+    /// previous account's scopes and totals.
+    func testAccountCensusIsNotSharedAcrossTokens() async throws {
+        let transport = ProviderMockTransport(responses: [
+            .json(#"{"user":{"username":"marco"}}"#),
+            .json(#"{"teams":[]}"#),
+            .json(#"{"projects":[{"id":"prj_1"}]}"#),
+            .json(#"{"deployments":[]}"#),
+            .json(#"{"user":{"username":"other"}}"#),
+            .json(#"{"teams":[]}"#),
+            .json(#"{"projects":[{"id":"prj_a"},{"id":"prj_b"},{"id":"prj_c"}]}"#),
+            .json(#"{"deployments":[]}"#)
+        ])
+        let client = VercelClient(
+            transport: transport,
+            baseURL: URL(string: "https://vercel.test")!,
+            now: { Date(timeIntervalSince1970: 10_000) }
+        )
+
+        let first = try await client.fetch(token: "token-one")
+        let second = try await client.fetch(token: "token-two")
+
+        XCTAssertEqual(first.accountLabel, "marco")
+        XCTAssertEqual(first.projectCount, 1)
+        XCTAssertEqual(second.accountLabel, "other")
+        XCTAssertEqual(second.projectCount, 3)
+    }
+
     func testProviderAuthenticationFailureIsExplicit() async {
         let transport = ProviderMockTransport(responses: [.status(401)])
         let client = VercelClient(transport: transport, baseURL: URL(string: "https://vercel.test")!)
@@ -149,6 +217,25 @@ final class ExternalProviderClientTests: XCTestCase {
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
+    }
+}
+
+private final class MutableTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: Date
+
+    init(now: Date) { current = now }
+
+    func now() -> Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return current
+    }
+
+    func advance(by interval: TimeInterval) {
+        lock.lock()
+        defer { lock.unlock() }
+        current = current.addingTimeInterval(interval)
     }
 }
 
