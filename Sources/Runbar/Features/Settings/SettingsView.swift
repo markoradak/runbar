@@ -391,6 +391,32 @@ struct SettingsView: View {
             tokenURL: URL(string: "https://dash.cloudflare.com/profile/api-tokens")!,
             permissionText: "Create a custom token with Account · Cloudflare Pages · Read for the accounts you want to monitor. Tokens are stored only in macOS Keychain."
         )
+        integrationRequestCard
+    }
+
+    /// Sits at the end of the connectable providers, which is where the "what
+    /// about mine?" question actually occurs. Opening GitHub rather than
+    /// composing anything in-app keeps the no-backend invariant intact and
+    /// leaves one issue-body format to maintain instead of two.
+    private var integrationRequestCard: some View {
+        SettingsCard(
+            footer: "Runbar has no backend, so a provider needs a public API, a read-only token, and a way to list builds across a whole account. Opens GitHub, where the request is researched against those constraints and answered with either a plan or the specific reason it cannot work."
+        ) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Missing a provider?")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("Request an integration · opens GitHub")
+                        .font(SettingsUI.mono(10))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Link(destination: RunbarLinks.integrationRequest) {
+                    Label("Request", systemImage: "arrow.up.forward.square")
+                }
+                .buttonStyle(.bordered)
+            }
+        }
     }
 
     private var githubCard: some View {

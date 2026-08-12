@@ -11,7 +11,7 @@ rule lives only in workflow YAML it will drift; put it here.
 
 | Stage | Trigger | Actor | Ends with |
 | --- | --- | --- | --- |
-| Request | The form on getrunbar.app, or the issue template | The requester | An issue labeled `integration-request` |
+| Request | Settings → Accounts in the app, the form on getrunbar.app, or the issue template | The requester | An issue labeled `integration-request` |
 | Triage | That label | `integration-triage.yml` | A feasibility brief, or a decline + close |
 | Build | You applying `ready-to-build` | `integration-build.yml` | A PR labeled `integration` |
 | Review | The build workflow dispatching it | `integration-review.yml` | An approving review, or requested changes |
@@ -20,6 +20,13 @@ rule lives only in workflow YAML it will drift; put it here.
 The gate at "you applying `ready-to-build`" is deliberate. The request form is public and
 unauthenticated, so anything upstream of that label is open to strangers; nothing downstream of it
 spends real time or ships code without a human deciding it should.
+
+The three request routes converge on one issue on purpose. The app links to the issue *template*
+rather than carrying `?labels=` the way the site's form does — see `RunbarLinks`; a URL compiled
+into a shipped binary is permanent, and GitHub rejects the whole URL if a label named in it is ever
+deleted. Renaming or removing `.github/ISSUE_TEMPLATE/integration-request.yml` therefore degrades
+every installed copy to GitHub's issue chooser rather than breaking it, but it does drop the label,
+and triage would then be relying on its title-prefix fallback.
 
 The gate at merge is also deliberate, and is the one worth re-reading before anyone is tempted to
 close it. A merge here is not a merge — pushing a `v*` tag builds, notarizes, and publishes a
