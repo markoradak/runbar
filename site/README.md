@@ -157,6 +157,23 @@ other's builds:
 - `.github/workflows/ci.yml` has `paths-ignore: ['site/**', ...]` so a CSS tweak
   doesn't boot a macOS runner and run the Swift test suite.
 
+The `ignoreCommand` has a consequence worth knowing before it confuses you. It
+exits **0** when `site/` is untouched, and Vercel reads exit 0 as *ignore this
+build*, which the dashboard reports as **Canceled** — a healthy skip that looks
+like a failure. So the deployed site is not HEAD; it is the last commit that
+touched `site/`, and a run of Swift-only commits leaves it several behind.
+Redeploying HEAD does not help, because the redeploy re-runs the same check and
+skips again.
+
+Nothing here reads from the deployment, so being behind is normally harmless:
+the release data comes from the GitHub API at runtime (`lib/release.ts`). It
+stops being harmless when a **Vercel environment variable changes**, since those
+bind at build time. Adding or rotating `REVALIDATE_SECRET` has no effect until a
+build actually runs, and the endpoint fails closed, so the symptom is a flat 401
+from a correctly configured project. To force one, redeploy the most recent
+deployment whose commit touched `site/` — check with
+`git diff --quiet <sha>^ <sha> -- site/` — or push a commit that does.
+
 The app updates itself through Sparkle against GitHub Releases
 (`SUFeedURL` in `Sources/Runbar/Info.plist`), not through this site — a broken
 deploy here cannot affect installed apps.
