@@ -1,0 +1,231 @@
+name: Integration review
+
+# Second, independent pass over an integration PR. Its question is not "is this
+# code good" but "what does this do to the integrations that already ship" —
+# shared-file blast radius, the poll budget every provider draws from, and the
+# invariants in docs/ARCHITECTURE.md.
+#
+# It posts a comment and a label. It does not merge, and it cannot: Claude has no
+# GitHub access here, and the workflow's own review would be a self-review of a
+# PR the same token opened, which GitHub refuses anyway. Merging and releasing
+# stay with a human, for the reason set out at the top of docs/INTEGRATIONS.md.
+#
+# Dispatched by integration-build.yml, and runnable by hand against any PR.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to review
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: integration-review-${{ inputs.pr }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check out the PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ inputs.pr }}
+        run: gh pr checkout "$PR"
+
+      - name: Select newest Xcode
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$XCODE" ]; then
+            XCODE="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          fi
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      # Authoritative, because a PR opened with GITHUB_TOKEN raises no
+      # `pull_request` event and so never triggers ci.yml.
+      - name: Run the suite
+        id: tests
+        continue-on-error: true
+        # Explicit `shell: bash` for `pipefail` — the default shell would report
+        # tee's exit code and every failing suite would read as a pass.
+        shell: bash
+        run: scripts/test.sh 2>&1 | tee test-output.txt
+
+      - name: Gather the diff and blast radius
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ inputs.pr }}
+        run: |
+          gh pr view "$PR" --json number,title,body,headRefName \
+            --template '# PR #{{.number}}: {{.title}}
+
+          {{.body}}
+          ' > pr.md
+
+          git diff "origin/main...HEAD" > diff.patch
+          git diff --stat "origin/main...HEAD" > changed-files.txt
+
+          # Files every other integration depends on. Touching one is not
+          # forbidden, but it is the difference between "adds a provider" and
+          # "changes how all providers work", and the review must treat it that
+          # way.
+          {
+            echo "== Shared, affects every provider =="
+            git diff --name-only "origin/main...HEAD" | grep -E \
+              'Networking/ProviderTransport\.swift|Providers/(ExternalProviderMonitor|ProviderModels)\.swift|Persistence/(SQLiteProviderStore|SQLiteSchema|SQLiteSupport)\.swift|Polling/|Git/|Keychain/' \
+              || echo "(none)"
+            echo ""
+            echo "== Out of bounds for an integration PR =="
+            git diff --name-only "origin/main...HEAD" | grep -E \
+              '^\.github/workflows/(ci|release)\.yml$|^scripts/release\.sh$|^project\.yml$' \
+              || echo "(none)"
+            echo ""
+            echo "== Existing tests modified or deleted =="
+            git diff --name-status "origin/main...HEAD" -- Tests/ | grep -vE '^A' \
+              || echo "(none)"
+          } > blast-radius.txt
+
+          if [ "${{ steps.tests.outcome }}" = "success" ]; then
+            echo "scripts/test.sh PASSED on the runner." > test-summary.txt
+          else
+            echo "scripts/test.sh FAILED on the runner. Tail:" > test-summary.txt
+            tail -100 test-output.txt >> test-summary.txt
+          fi
+
+      - name: Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          claude_args: |
+            --model claude-opus-5
+            --max-turns 80
+            --allowedTools Read,Grep,Glob,WebSearch,WebFetch,Write
+          prompt: |
+            Review a pull request that adds an execution provider to Runbar, a
+            macOS menu-bar monitor for CI and deployment providers.
+
+            The code was written by an automated agent working from published API
+            documentation, with no access to a real account on the provider. Its
+            PR body may be confident about things it never observed. Assume it is
+            wrong until the diff shows otherwise, and treat its self-assessment as
+            a claim to check rather than evidence. You have no GitHub access; the
+            workflow posts your verdict.
+
+            Read `docs/INTEGRATIONS.md` and `docs/ARCHITECTURE.md` for the
+            standard, then `pr.md`, `diff.patch`, `changed-files.txt`,
+            `blast-radius.txt`, and `test-summary.txt`. Read the surrounding
+            source files — the diff alone will not tell you whether a change fits.
+
+            Your subject is regression, in this order:
+
+            1. **Blast radius.** Anything listed as shared in `blast-radius.txt`
+               is used by GitHub Actions, Vercel, and Cloudflare Pages alike. For
+               each one, decide whether the change was necessary and whether it
+               alters behavior for the existing providers. A file listed as out of
+               bounds is blocking on its own. A modified or deleted existing test
+               is blocking unless the PR body proves the old assertion was wrong.
+            2. **Poll budget.** Every external provider shares one account-wide
+               timer (60s idle, 30s active, 5s menu-open, 1–9s push burst). Work
+               out from the code — not from the PR body — how many requests one
+               tick now costs, and whether it is O(1), O(scopes), or O(projects).
+               An O(projects) walk on every tick, uncached, is blocking: it
+               threatens invariant #5 for every provider, not just this one.
+            3. **The state whitelist.** Only states that certainly mean "still
+               going" may map to a running status; anything unrecognized must map
+               to finished. A default that reads unknown states as queued or
+               running is blocking — it produced a deployment that spun forever in
+               v0.1.10 and could never self-correct. Check the provider's own
+               documentation for terminal states that never build (spend limits,
+               skipped, cancelled, deleted) and confirm each is handled.
+            4. **Invariants.** No backend (#1). Token only in the Keychain, never
+               in a log line, error message, or fixture (#2). Rate-limit headers
+               parsed and respected (#5). GET requests only (#6).
+            5. **Correctness of the client itself.** Date parsing, pagination,
+               optional fields that the API can omit, and error mapping. Decoding
+               that assumes a field is always present is the most likely way this
+               fails against a real account.
+            6. **Completeness.** The docs/INTEGRATIONS.md checklist, including the
+               site and README updates. A missing site entry ships an app that
+               supports a provider the marketing page does not list; that is
+               non-blocking but must be named.
+
+            Findings are for a maintainer who will decide whether to ship this to
+            every installed copy. Be specific — file and line, what breaks, and
+            the input or state that makes it break. Say "I could not determine
+            this from the diff" when that is the case; a guess dressed as a
+            finding wastes more time than an admitted gap. Do not pad the review
+            with praise or with issues you do not believe are real.
+
+            If the suite failed, that is blocking, and the failure is your first
+            finding.
+
+            Write your verdict as JSON to `review-verdict.json`:
+            {"verdict": "pass" | "changes_requested",
+             "blocking": <count of blocking findings>,
+             "review": "<markdown>"}
+
+            Use `changes_requested` if there is at least one blocking finding.
+            `pass` means you found nothing blocking — it does not mean you believe
+            the integration works, and your review should say which of the two you
+            mean. Write no other file.
+
+      - name: Post review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ inputs.pr }}
+        run: |
+          if [ ! -f review-verdict.json ]; then
+            echo "::error::Claude produced no review-verdict.json"
+            gh pr comment "$PR" --body \
+              "Automated review did not complete. [See the run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})."
+            exit 1
+          fi
+
+          VERDICT="$(jq -r '.verdict' review-verdict.json)"
+          {
+            if [ "$VERDICT" = "pass" ]; then
+              echo "## Automated review: nothing blocking"
+            else
+              echo "## Automated review: changes requested"
+            fi
+            echo ""
+            jq -r '.review' review-verdict.json
+            echo ""
+            echo "---"
+            echo ""
+            echo "<sub>Independent agent review, posted as a comment rather than a formal review because the same token opened this PR. It is not a substitute for connecting a real provider token and watching one build — see [docs/INTEGRATIONS.md](${{ github.server_url }}/${{ github.repository }}/blob/main/docs/INTEGRATIONS.md). Merging and releasing are yours.</sub>"
+          } > review.md
+          gh pr comment "$PR" --body-file review.md
+
+          # Label removal fails when the label was never applied, which is the
+          # normal case on a first review — never fatal.
+          case "$VERDICT" in
+            pass)
+              gh pr edit "$PR" --add-label review-passed
+              gh pr edit "$PR" --remove-label review-changes-requested || true
+              ;;
+            changes_requested)
+              gh pr edit "$PR" --add-label review-changes-requested
+              gh pr edit "$PR" --remove-label review-passed || true
+              gh pr ready "$PR" --undo || true
+              ;;
+            *)
+              echo "::error::Unrecognized verdict: $VERDICT"
+              exit 1
+              ;;
+          esac

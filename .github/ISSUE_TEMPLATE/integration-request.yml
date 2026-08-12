@@ -1,0 +1,34 @@
+name: Integration request
+description: Ask for a CI or deployment provider Runbar doesn't monitor yet
+title: "Integration request: "
+labels: ["integration-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Filing this starts an automated triage pass that researches the
+        service's API and posts back either a feasibility brief or the specific
+        reason it can't work. Runbar has no backend, so a provider needs a public
+        JSON API, a static read-only token, and an endpoint that lists builds
+        across a whole account — see
+        [docs/INTEGRATIONS.md](https://github.com/markoradak/runbar/blob/main/docs/INTEGRATIONS.md).
+
+  - type: input
+    id: service
+    attributes:
+      label: Service
+      placeholder: CircleCI, Netlify, Buildkite…
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: What you'd want to see in the menu bar
+      placeholder: Pipeline status per branch, deploy previews, failure logs…
+
+  - type: textarea
+    id: api
+    attributes:
+      label: API documentation
+      description: A link to the service's API reference, if you have one handy. Optional — triage will look either way.

@@ -34,8 +34,11 @@ const SUPPORTED: {
  * the one exception to that — so the request opens on GitHub, under the
  * visitor's own account, where they can edit it before filing.
  *
- * No `labels` parameter: GitHub rejects the URL if the label doesn't exist on
- * the repo yet, which would break the link rather than degrade it.
+ * `integration-request` is what `.github/workflows/integration-triage.yml`
+ * triggers on. GitHub rejects the whole URL if a label in it doesn't exist on
+ * the repo, so deleting or renaming that label breaks this link outright rather
+ * than degrading it — triage also matches on the title prefix as a fallback,
+ * but the link itself would already be dead by then.
  */
 function issueUrl(service: string, notes: string) {
   const title = `Integration request: ${service.trim()}`;
@@ -50,7 +53,7 @@ function issueUrl(service: string, notes: string) {
     "Sent from the Runbar site.",
   ].join("\n");
 
-  return `${REPO_URL}/issues/new?title=${encodeURIComponent(
+  return `${REPO_URL}/issues/new?labels=integration-request&title=${encodeURIComponent(
     title,
   )}&body=${encodeURIComponent(body)}`;
 }

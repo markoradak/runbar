@@ -65,11 +65,16 @@ rejected (webhooks, GraphQL, git hooks) with the reasoning kept so they don't ge
 
 ## Contributing
 
-Issues and PRs welcome. Two things worth reading first:
+Issues and PRs welcome. Three things worth reading first:
 
 - The invariants and the "evaluated and rejected" section in
   [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). If a change conflicts with an invariant, the
   change is wrong — that's what makes it an invariant.
+- [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) if you're adding a provider: what disqualifies
+  one, the poll budget every integration draws from, and the full checklist. Filing an
+  [integration request](https://github.com/markoradak/runbar/issues/new?template=integration-request.yml)
+  starts an automated triage pass that researches the API and reports back either a feasibility
+  brief or the specific reason it can't work.
 - The open issues are real and honestly described, including the known architectural ones.
 
 Run the tests with `scripts/test.sh`.

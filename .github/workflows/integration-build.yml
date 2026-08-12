@@ -1,0 +1,257 @@
+name: Integration build
+
+# Implements an integration that triage found feasible, and opens a PR for it.
+# Gated on a maintainer applying `ready-to-build` — nothing here starts on a
+# stranger's say-so.
+#
+# Runs on macOS because there is no other way. The app is SwiftUI, Keychain, and
+# FSEvents; it does not build on Linux, so a Claude that cannot compile would be
+# writing Swift blind. Public repositories get macOS runner minutes free, which
+# is the only reason this is affordable.
+#
+# The workflow owns git and GitHub; Claude owns the code. That split keeps the
+# branch, the commit, the PR, and the handoff to review deterministic instead of
+# depending on how a session happened to go.
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number to build
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: integration-build-${{ github.event.issue.number || inputs.issue }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || github.event.label.name == 'ready-to-build'
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          XCODE="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$XCODE" ]; then
+            XCODE="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          fi
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Resolve issue
+        id: issue
+        env:
+          NUMBER: ${{ github.event.issue.number || inputs.issue }}
+        run: |
+          echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
+          echo "branch=integration/issue-$NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare branch and scratch files
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUMBER: ${{ steps.issue.outputs.number }}
+          BRANCH: ${{ steps.issue.outputs.branch }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+
+          # Scratch files Claude reads and writes. Excluded locally so a broad
+          # `git add` can never commit them, without adding noise to .gitignore.
+          printf '%s\n' request.md brief.md pr-body.md commit-message.txt \
+            >> .git/info/exclude
+
+          gh issue view "$NUMBER" --json number,title,body \
+            --jq '"# Issue #\(.number): \(.title)\n\n\(.body)"' > request.md
+
+          # The triage brief is the most recent comment carrying the API
+          # research. Hand Claude every comment and let it pick.
+          gh issue view "$NUMBER" --json comments \
+            --jq '.comments[] | "## Comment by \(.author.login)\n\n\(.body)\n"' \
+            > brief.md
+
+      - name: Implement
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          claude_args: |
+            --model claude-opus-5
+            --max-turns 200
+            --allowedTools Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch
+          prompt: |
+            Implement a new execution provider for Runbar, a macOS menu-bar
+            monitor for CI and deployment providers.
+
+            Read `docs/INTEGRATIONS.md` first and follow its checklist exactly —
+            it is the definition of done, and a PR missing any item is
+            incomplete. Then read `docs/ARCHITECTURE.md` for the six invariants,
+            `request.md` for what was asked, and `brief.md` for the triage
+            research (endpoints, auth, state whitelist, per-tick cost). Verify
+            the brief against the provider's live API documentation on the web
+            rather than trusting it — it was written from docs too, and it may be
+            wrong or out of date.
+
+            `Sources/Runbar/Networking/CloudflarePagesClient.swift` is the model
+            to follow: injected `transport`/`baseURL`/`now`, every request
+            through `ProviderHTTP.get`, and normalization into `ProviderExecution`.
+
+            Non-negotiable, on top of the checklist:
+
+            - Map running states as a WHITELIST. Only states that certainly mean
+              "still going" map to a running status; everything unrecognized maps
+              to finished. docs/INTEGRATIONS.md explains why the reverse shipped
+              a bug that could never self-correct.
+            - Keep the per-tick request cost O(1) or O(scopes). Every external
+              provider shares one account-wide timer, so this cost is paid by
+              every user of every other integration too. If the API forces a
+              per-project walk, cache the account census the way VercelClient
+              does and say so in the PR body.
+            - GET requests only. The token comes from the Keychain entry and
+              appears in no log line, no test fixture, and no error message.
+            - Add no dependency, and do not touch `.github/workflows/ci.yml`,
+              `.github/workflows/release.yml`, `scripts/release.sh`, or
+              `project.yml`.
+            - Do not modify or delete an existing test. If one starts failing,
+              your change is wrong until you can prove otherwise in the PR body.
+            - Do not run `git` or `gh`. The workflow commits, pushes, and opens
+              the PR for you.
+
+            Run `scripts/test.sh` and iterate until it passes. It regenerates the
+            Xcode project and runs the whole suite; expect it to be slow.
+
+            When the code is done, write two files:
+
+            `commit-message.txt` — a conventional-commit subject line
+            (`feat: add <Service> integration`), a blank line, then a short body.
+
+            `pr-body.md` — the PR description, in this shape:
+
+            ## What this adds
+            One paragraph.
+
+            ## API surface used
+            Endpoints, auth header, token scope, and the URL where a user creates
+            a token.
+
+            ## Poll cost
+            Requests per tick and whether it is O(1), O(scopes), or O(projects);
+            note any caching you added. State the impact on the shared timer.
+
+            ## State mapping
+            The whitelist, and the terminal states you deliberately excluded.
+
+            ## Not verified against a live API
+            Say plainly that no real token for this provider was used, list every
+            response shape you inferred from documentation rather than observed,
+            and name the single check a human should run first with a real token.
+            Do not soften this section.
+
+            ## Checklist
+            docs/INTEGRATIONS.md item by item, each ticked or explained.
+
+            Be honest in `pr-body.md` about anything you could not finish or were
+            unsure of. An accurate PR that admits a gap is worth more than a
+            confident one that hides it — a reviewer reads this next, and so does
+            a human deciding whether to ship it to every installed copy.
+
+      - name: Verify
+        id: verify
+        continue-on-error: true
+        run: scripts/test.sh
+
+      - name: Open pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUMBER: ${{ steps.issue.outputs.number }}
+          BRANCH: ${{ steps.issue.outputs.branch }}
+          TESTS: ${{ steps.verify.outcome }}
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "::error::Claude produced no changes"
+            gh issue comment "$NUMBER" --body \
+              "Automated build produced no changes. [See the run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})."
+            exit 1
+          fi
+
+          git add -A
+          if [ -s commit-message.txt ]; then
+            git commit --file commit-message.txt
+          else
+            git commit -m "feat: add integration requested in #$NUMBER"
+          fi
+          # Force, because re-dispatching the same issue rebuilds this branch
+          # from scratch. It is scoped to one issue and nothing else pushes to it.
+          git push --force --set-upstream origin "$BRANCH"
+
+          [ -s pr-body.md ] || echo "_No PR body was written._" > pr-body.md
+          {
+            echo ""
+            echo "---"
+            echo ""
+            echo "Closes #$NUMBER"
+            echo ""
+            if [ "$TESTS" = "success" ]; then
+              echo "\`scripts/test.sh\` passed on the runner."
+            else
+              echo "> [!WARNING]"
+              echo "> \`scripts/test.sh\` **failed** on the runner. Opened as a draft."
+            fi
+            echo ""
+            echo "<sub>Written by an automated agent from published API docs, not verified against a live account. Reviewed next by \`integration-review.yml\`; merging and releasing are a human's call — see [docs/INTEGRATIONS.md](${{ github.server_url }}/${{ github.repository }}/blob/main/docs/INTEGRATIONS.md).</sub>"
+          } >> pr-body.md
+
+          # An `&&` list here would be fatal under `set -e` whenever the file is
+          # absent, which is exactly the case the fallback exists for.
+          TITLE="feat: add integration requested in #$NUMBER"
+          if [ -s commit-message.txt ]; then
+            TITLE="$(head -1 commit-message.txt)"
+          fi
+
+          DRAFT=""
+          [ "$TESTS" = "success" ] || DRAFT="--draft"
+          # shellcheck disable=SC2086
+          gh pr create \
+            --base main --head "$BRANCH" \
+            --title "$TITLE" \
+            --body-file pr-body.md \
+            --label integration \
+            $DRAFT \
+            || echo "::notice::A PR for $BRANCH already exists; its branch was updated instead"
+
+          PR="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')"
+          if [ -z "$PR" ]; then
+            echo "::error::No open PR found for $BRANCH"
+            exit 1
+          fi
+          echo "number=$PR" >> "$GITHUB_OUTPUT"
+          gh issue comment "$NUMBER" --body "Implementation opened in #$PR."
+
+      # `workflow_dispatch` is the one event GITHUB_TOKEN is still allowed to
+      # raise, so it is how this hands off to review. A PR opened with
+      # GITHUB_TOKEN raises no `pull_request` event, which is also why
+      # integration-review.yml runs the test suite itself rather than trusting
+      # ci.yml to have run.
+      - name: Hand off to review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: gh workflow run integration-review.yml -f pr="$PR"
