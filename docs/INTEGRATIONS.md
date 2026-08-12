@@ -11,7 +11,7 @@ rule lives only in workflow YAML it will drift; put it here.
 
 | Stage | Trigger | Actor | Ends with |
 | --- | --- | --- | --- |
-| Request | The form on runbar.app, or the issue template | The requester | An issue labeled `integration-request` |
+| Request | The form on getrunbar.app, or the issue template | The requester | An issue labeled `integration-request` |
 | Triage | That label | `integration-triage.yml` | A feasibility brief, or a decline + close |
 | Build | You applying `ready-to-build` | `integration-build.yml` | A PR labeled `integration` |
 | Review | The build workflow dispatching it | `integration-review.yml` | An approving review, or requested changes |

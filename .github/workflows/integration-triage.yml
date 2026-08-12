@@ -5,7 +5,7 @@ name: Integration triage
 # decline with the reason. It never starts a build — that needs a human to apply
 # `ready-to-build` (see integration-build.yml).
 #
-# The request form on runbar.app files these issues under the visitor's own
+# The request form on getrunbar.app files these issues under the visitor's own
 # account, so the body is untrusted input from a stranger. Two things contain
 # that. Claude runs here with no GitHub access at all — the workflow gathers the
 # facts into files, Claude reads them and writes a verdict file, and the workflow
