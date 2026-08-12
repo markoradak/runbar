@@ -19,7 +19,7 @@ name: Release
 #                           <sparkle-bin>/generate_keys -x /dev/stdout
 #
 # Optional:
-#   REVALIDATE_SECRET       shared secret for runbar.app's /api/revalidate, so
+#   REVALIDATE_SECRET       shared secret for getrunbar.app's /api/revalidate, so
 #                           the site's download link updates the moment a
 #                           release publishes. Must match the REVALIDATE_SECRET
 #                           environment variable set in the Vercel project.
@@ -222,11 +222,16 @@ jobs:
             "build/staging/Runbar-$VERSION.zip" \
             "build/staging/appcast.xml"
 
-      # runbar.app reads the latest release from the GitHub API and caches it
+      # getrunbar.app reads the latest release from the GitHub API and caches it
       # for an hour (site/lib/release.ts), so without this the download button
       # keeps serving the *previous* zip for up to that long after a release.
       # Non-fatal by design: the release itself has already published, and the
       # hourly revalidate still catches up on its own.
+      #
+      # The host must be getrunbar.app. runbar.app is registered but parked with
+      # no certificate, so posting there fails the TLS handshake — and because
+      # the failure is swallowed to keep releases green, it would look exactly
+      # like a working step (see site/app/layout.tsx for the same trap).
       - name: Refresh site release cache
         env:
           REVALIDATE_SECRET: ${{ secrets.REVALIDATE_SECRET }}
@@ -235,9 +240,9 @@ jobs:
             echo "::warning::REVALIDATE_SECRET is not set — skipping site refresh"
             exit 0
           fi
-          curl -fsS --max-time 30 -X POST https://runbar.app/api/revalidate \
+          curl -fsS --max-time 30 -X POST https://getrunbar.app/api/revalidate \
             -H "x-revalidate-secret: $REVALIDATE_SECRET" \
-            || echo "::warning::Site revalidation failed; runbar.app will catch up within the hour"
+            || echo "::warning::Site revalidation failed; getrunbar.app will catch up within the hour"
 
       - name: Clean up keychain
         if: always()

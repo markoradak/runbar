@@ -145,7 +145,9 @@ Vercel project settings:
 | `NEXT_PUBLIC_SITE_URL` | the production URL, once a domain is attached |
 
 `NEXT_PUBLIC_SITE_URL` only affects the absolute URLs in the OG/Twitter tags; it
-defaults to `https://runbar.app`.
+defaults to `https://getrunbar.app`. Not `runbar.app` — that domain is registered
+but parked without a certificate, and crawlers fetching `og:image` over the wire
+would fail every unfurl while the page itself kept looking fine.
 
 Two guards keep the Swift and web halves of the repo from triggering each
 other's builds:
